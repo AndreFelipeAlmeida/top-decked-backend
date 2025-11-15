@@ -124,3 +124,27 @@ def retornar_jogador_pelo_usuario(usuario_id: int, session: SessionDep):
         raise TopDeckedException.not_found("Loja nao encontrado")
     
     return jogador  
+
+@router.post("/upload_banner", response_model=LojaPublico)
+def update_banner(session: SessionDep, 
+                token_data : Annotated[TokenData, Depends(retornar_loja_atual)],
+                file: UploadFile = File(None)):
+    
+    loja = session.get(Loja, token_data.id)
+    
+    if not loja:
+        raise TopDeckedException.not_found("Loja nao encontrado")
+    
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    if file:
+        ext = file.filename.split(".")[-1]
+        file_path = os.path.join(UPLOAD_DIR, f"user_{loja.usuario.id}_banner.{ext}")
+        with open(file_path, "wb") as f:
+            f.write(file.file.read())
+        loja.banner = f"user_{loja.usuario.id}_banner.{ext}"
+        session.add(loja.usuario)
+        session.commit()
+    return loja

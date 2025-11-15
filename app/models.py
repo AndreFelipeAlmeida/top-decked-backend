@@ -85,7 +85,7 @@ class LojaBase(SQLModel):
     endereco: str = Field(default=None, index=True)
     telefone: Optional[str] = Field(default=None, nullable=True)
     site: Optional[str] = Field(default=None, nullable=True)
-
+    banner: Optional[str] = Field(default=None, unique=True)
 
 class Loja(LojaBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
