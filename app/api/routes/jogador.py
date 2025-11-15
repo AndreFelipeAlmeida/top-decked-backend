@@ -8,9 +8,9 @@ from typing import Annotated, List
 from app.core.security import TokenData
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
-from app.models import Usuario, Jogador, JogadorTorneioLink
+from app.models import Usuario, Jogador, JogadorTorneioLink, Rodada
 from app.utils.UsuarioUtil import verificar_novo_usuario
-from app.utils.JogadorUtil import calcular_estatisticas, retornar_historico_jogador
+from app.utils.JogadorUtil import calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas
 from app.utils.datetimeUtil import data_agora_brasil
 from app.dependencies import retornar_jogador_atual
 from typing import Annotated
@@ -59,6 +59,13 @@ def get_estatisticas(session: SessionDep,
     jogador = session.get(Jogador, token_data.id)
 
     return calcular_estatisticas(session, jogador)
+
+@router.get("/rodadas")
+def retornar_rodadas(session: SessionDep,
+                     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+    jogador = session.get(Jogador, token_data.id)
+    
+    return retornar_todas_rodadas(session, jogador)
 
 @router.get("/historico")
 def retornar_historico(session: SessionDep,

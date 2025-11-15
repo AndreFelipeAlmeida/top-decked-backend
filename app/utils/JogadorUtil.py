@@ -18,22 +18,24 @@ def posicao_do_jogador(ranking: list, jogador_id: str):
 def calcular_estatisticas(session: SessionDep, jogador: Jogador):
     estat_por_mes = _retornar_estatisticas_mensais(session, jogador.pokemon_id)
     torneios_links = session.exec(select(JogadorTorneioLink)
-                                  .where(JogadorTorneioLink.jogador_id == jogador.pokemon_id))
+                                  .where(JogadorTorneioLink.jogador_id == jogador.pokemon_id)).all()
     
-    torneio_totais = len(torneios_links.all())
+    torneio_totais = len(torneios_links)
     torneios_historico = _retornar_estatisticas_torneio(session, jogador, torneios_links)
     taxa_vitoria = calcular_taxa_vitoria(session, jogador)
     rank_geral = posicao_do_jogador(calcula_ranking_geral(session), jogador.pokemon_id)
     rank_mensal = posicao_do_jogador(calcula_ranking_geral(session, data_agora_brasil().month), jogador.pokemon_id)
     rank_anual = posicao_do_jogador(calcula_ranking_geral(session, data_agora_brasil().year), jogador.pokemon_id)
-
+    vde = retornar_vde_jogador(session, jogador.pokemon_id)
+    
     return {"estatisticas_anuais": estat_por_mes, 
             "torneio_totais" : torneio_totais,
             "taxa_vitoria" : taxa_vitoria,
             "rank_geral" : rank_geral,
             "rank_mensal": rank_mensal,
             "rank_anual": rank_anual,
-            "historico" : torneios_historico}
+            "historico" : torneios_historico,
+            **vde}
 
 def _retornar_estatisticas_torneio(session: SessionDep, jogador: Jogador, 
                                    torneios_links: List["JogadorTorneioLink"]):
@@ -54,7 +56,7 @@ def _retornar_estatisticas_torneio(session: SessionDep, jogador: Jogador,
 def _retornar_estatisticas_mensais(session: SessionDep, jogador_id: str):
     rodadas = session.exec(
         select(Rodada).where(
-            (Rodada.jogador1_id == jogador_id) or
+            (Rodada.jogador1_id == jogador_id) |
             (Rodada.jogador2_id == jogador_id)
         )
     ).all()
@@ -70,6 +72,7 @@ def _retornar_estatisticas_mensais(session: SessionDep, jogador_id: str):
         chave = (ano, mes)
         estatisticas[chave]["pontos"] += link.pontuacao_com_regras or 0
         
+
     for rodada in rodadas:
         ano = rodada.data_de_inicio.year
         mes = rodada.data_de_inicio.month
@@ -155,8 +158,8 @@ def retornar_historico_jogador(session: SessionDep, jogador: Jogador):
     oponentes_salvos = {}
     
     rodadas = session.exec(select(Rodada)
-                           .where(Rodada.jogador1_id == jogador.pokemon_id 
-                                  or Rodada.jogador2_id == jogador.pokemon_id))
+                           .where((Rodada.jogador1_id == jogador.pokemon_id)
+                                  | (Rodada.jogador2_id == jogador.pokemon_id)))
     
     for rodada in rodadas:
         oponente = _descobrir_oponente(rodada, jogador.pokemon_id)
@@ -176,15 +179,19 @@ def retornar_historico_jogador(session: SessionDep, jogador: Jogador):
         
         oponentes_salvos = _processar_rodada(
             oponentes_salvos, rodada, jogador.pokemon_id, oponente)
-
+    
     return list(oponentes_salvos.values())
 
 
-def retornar_vde_jogador(session: SessionDep, jogador: JogadorTorneioLink, torneio: Torneio):
-    rodadas = session.exec(select(Rodada)
-                           .where((Rodada.jogador1_id == jogador.jogador_id
-                                  or Rodada.jogador2_id == jogador.jogador_id)
-                                  and Rodada.torneio_id == torneio.id))
+def retornar_vde_jogador(session: SessionDep, jogador_id: str, torneio: Torneio | None = None):
+    consulta = select(Rodada).where((Rodada.jogador1_id == jogador_id)
+                                     | (Rodada.jogador2_id == jogador_id))
+    
+    if torneio:
+        consulta = consulta.where(Rodada.torneio_id == torneio.id)
+    
+    rodadas = session.exec(consulta).all()
+    
     vde = {
         "vitorias": 0,
         "derrotas": 0,
@@ -194,13 +201,45 @@ def retornar_vde_jogador(session: SessionDep, jogador: JogadorTorneioLink, torne
         if not rodada.finalizada:
             continue
         
-        oponente = _descobrir_oponente(rodada, jogador.jogador_id)
+        oponente = _descobrir_oponente(rodada, jogador_id)
 
         if rodada.vencedor == oponente:
             vde["derrotas"] += 1
-        elif rodada.vencedor == jogador.jogador_id:
-            vde["vitoria"] += 1
+        elif rodada.vencedor == jogador_id:
+            vde["vitorias"] += 1
         else:
             vde["empates"] += 1
 
     return vde
+
+
+def retornar_todas_rodadas(session: SessionDep, jogador: Jogador):
+    rodadas = session.exec(
+        select(Rodada).where(
+            (Rodada.jogador1_id == jogador.pokemon_id) |
+            (Rodada.jogador2_id == jogador.pokemon_id)
+        )
+    ).all()
+
+    result = []
+    for rodada in rodadas:
+        oponente = session.exec(select(Jogador)
+                                .where(Jogador.pokemon_id == (_descobrir_oponente(rodada, jogador.pokemon_id)))).first()
+
+        if rodada.vencedor == jogador.pokemon_id:
+            resultado = "vitoria"
+        elif not rodada.vencedor:
+            resultado = "empate"
+        else:
+            resultado = "derrota"
+        torneio = session.get(Torneio, rodada.torneio_id)
+        result.append({
+            "data": rodada.data_de_inicio,
+            "loja": torneio.loja.nome,
+            "rodada" : rodada.id,
+            "mesa": rodada.mesa,
+            "resultado": resultado,
+            "oponente": oponente.nome if oponente else "bye",
+        })
+        
+    return result

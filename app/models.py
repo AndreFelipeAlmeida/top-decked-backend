@@ -32,7 +32,6 @@ class Usuario(UsuarioBase, table=True):
 
     def set_email(self, email : str, session: SessionDep):
         try:
-            # Olhar o que é esse va;od
             valid = validate_email(email)
             num_usuarios = session.scalar(select(func.count(Usuario.id)).where(Usuario.email == email))
 
