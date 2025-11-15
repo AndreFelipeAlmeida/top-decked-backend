@@ -138,7 +138,6 @@ def update_banner(session: SessionDep,
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-
     if file:
         ext = file.filename.split(".")[-1]
         file_path = os.path.join(UPLOAD_DIR, f"user_{loja.usuario.id}_banner.{ext}")
