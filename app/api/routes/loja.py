@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, Request
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar
@@ -6,6 +6,7 @@ from app.models import Loja
 from app.models import Usuario
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
+from app.utils.emailUtil import criar_token_confirmacao
 from app.utils.datetimeUtil import data_agora_brasil
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
@@ -13,13 +14,15 @@ from typing import Annotated
 import os
 from datetime import datetime
 
+from app.core.security import fastmail
+from fastapi_mail import MessageSchema
 
 router = APIRouter(
     prefix="/lojas",
     tags=["Lojas"])
 
 @router.post("/", response_model=LojaPublico)
-def criar_loja(loja: LojaCriar, session: SessionDep):
+async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
     verificar_novo_usuario(loja.email, session)
     
     novo_usuario = Usuario(
@@ -44,6 +47,18 @@ def criar_loja(loja: LojaCriar, session: SessionDep):
     session.add(db_loja)
     session.commit()
     session.refresh(db_loja)
+
+    token = criar_token_confirmacao(db_loja.usuario.email)
+    link = f"{request.base_url}login/confirmar-email?token={token}"
+
+    mensagem = MessageSchema(
+        subject="Confirme seu email",
+        recipients=[db_loja.usuario.email],
+        body=f"Clique para confirmar: {link}",
+        subtype="plain"
+    )
+
+    await fastmail.send_message(mensagem)
 
     return db_loja
 

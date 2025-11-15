@@ -1,4 +1,4 @@
-from sqlmodel import Field, SQLModel, Relationship, Enum, Column, DateTime
+from sqlmodel import Field, SQLModel, Relationship, Enum, Column, DateTime, Boolean
 from typing import List, Optional
 import uuid
 from datetime import datetime
@@ -17,6 +17,7 @@ PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class UsuarioBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(index=True, unique=True)
+    is_active: bool = Field(default=False)
     foto: Optional[str] = Field(default=None, unique=True)
     data_cadastro: date = Field(sa_column=Column(DateTime(timezone=True),
             nullable=False, default=data_agora_brasil()
