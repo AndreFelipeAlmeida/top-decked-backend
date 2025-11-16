@@ -103,7 +103,7 @@ def iniciar_torneio(session: SessionDep, torneio_id: str,
         raise TopDeckedException.forbidden()
     if not torneio.status == StatusTorneio.ABERTO:
         raise TopDeckedException.bad_request("Torneio não pode ser iniciado")
-    if not torneio.regra_basica_id:
+    if not torneio.regra_basica_id and not regra_basica_id:
         raise TopDeckedException.bad_request("Torneio está sem regra básica")
     
     if pontuacao_de_participacao:

@@ -34,7 +34,8 @@ def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
 
 
 def editar_torneio_regras(session: SessionDep, torneio: Torneio, regra_basica: int, regras_adicionais: dict):
-    torneio.regra_basica_id = regra_basica
+    if regra_basica:
+        torneio.regra_basica_id = regra_basica
     
     for jogador in torneio.jogadores:
         jogador.pontuacao = 0
