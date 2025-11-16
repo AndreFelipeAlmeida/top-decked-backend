@@ -1,18 +1,18 @@
+import os
+from typing import Annotated
+from sqlalchemy import JSON, func
 from fastapi import APIRouter, Depends, UploadFile, File
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
-from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar
-from app.models import Loja
+from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
+from app.models import Loja, Torneio
 from app.models import Usuario
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.datetimeUtil import data_agora_brasil
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
-from typing import Annotated
-import os
-from datetime import datetime
-
+from app.utils.Enums import StatusTorneio
 
 router = APIRouter(
     prefix="/lojas",
@@ -48,10 +48,22 @@ def criar_loja(loja: LojaCriar, session: SessionDep):
     return db_loja
 
 
-@router.get("/", response_model=list[LojaPublico])
+@router.get("/", response_model=list[LojaPublicoTorneios])
 def retornar_lojas(session: SessionDep):
-    lojas = session.exec(select(Loja))
-    return lojas
+    lojas = session.exec(select(Loja)).all()
+
+    resultado = []
+    for loja in lojas:
+        qtd_torneios = session.scalar(select(func.count(Torneio.id))
+                                      .where((Torneio.loja_id == loja.id)
+                                  & (Torneio.status == StatusTorneio.FINALIZADO)))
+
+        loja_publico = LojaPublicoTorneios.model_validate(loja)
+
+        loja_publico.n_torneios = qtd_torneios
+        resultado.append(loja_publico)
+
+    return resultado
 
 
 @router.get("/{loja_id}", response_model=LojaPublico)
