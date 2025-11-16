@@ -51,7 +51,15 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
     mensagem = MessageSchema(
         subject="Confirme seu email",
         recipients=[db_jogador.usuario.email],
-        body=f"Clique para confirmar: {link}",
+        body = (
+            "Olá!\n\n"
+            "Obrigado por se cadastrar na TopDecked.\n"
+            "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
+            f"{link}\n\n"
+            "Se você não criou uma conta, ignore esta mensagem.\n\n"
+            "Atenciosamente,\n"
+            "Equipe TopDecked"
+        ),
         subtype="plain"
     )
 
