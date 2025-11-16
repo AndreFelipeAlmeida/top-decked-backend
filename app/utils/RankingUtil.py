@@ -2,6 +2,7 @@ from app.core.db import SessionDep
 from app.schemas.Ranking import Ranking, RankingPorLoja, RankingPorFormato
 from sqlmodel import select, extract
 from app.models import Jogador, JogadorTorneioLink, Rodada, Loja, Torneio
+from app.utils.Enums import StatusTorneio
 from collections import defaultdict
 
 
@@ -26,7 +27,8 @@ def calcula_ranking_geral(session: SessionDep, mes = None, ano = None):
             total_torneios += 1
             total_pontos += int(link.pontuacao_com_regras)
 
-            rodadas = select(Rodada).where(
+            rodadas = select(Rodada).join(Torneio).where(
+                    (Torneio.status == StatusTorneio.FINALIZADO) &
                     (Rodada.torneio_id == link.torneio_id) &
                     ((Rodada.jogador1_id == jogador.pokemon_id) | (Rodada.jogador2_id == jogador.pokemon_id))
                 )
@@ -176,7 +178,10 @@ def desempenho_por_formato(session: SessionDep, jogador: Jogador) -> list[Rankin
 def calcular_taxa_vitoria(session: SessionDep, jogador: Jogador):
     vitorias, derrotas, empates = 0, 0, 0
 
-    rodadas = session.exec(select(Rodada).where(
+    rodadas = session.exec(select(Rodada)
+                           .join(Torneio)
+                           .where(
+                               (Torneio.status == StatusTorneio.FINALIZADO) &
         ((Rodada.jogador1_id == jogador.pokemon_id) | (Rodada.jogador2_id == jogador.pokemon_id))))
 
     for rodada in rodadas:
