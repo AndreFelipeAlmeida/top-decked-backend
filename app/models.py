@@ -143,7 +143,7 @@ class TorneioBase(SQLModel):
     tipo: Optional[str] = Field(default="Desconhecido", nullable=True)
     taxa: float = Field(default=0)
     premio: Optional[str] = Field(default=None, nullable=True)
-    n_rodadadas: int = Field(default=0)
+    n_rodadas: int = Field(default=0)
     rodada_atual: int = Field(default=0)
     regra_basica_id: Optional[int] = Field(
         default=None, foreign_key="tipojogador.id", nullable=True)
