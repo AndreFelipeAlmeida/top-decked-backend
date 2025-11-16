@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import RedirectResponse
 
 from app.core.security import Token, autenticar, criar_token_de_acesso, ACCESS_TOKEN_EXPIRE_MINUTES, TokenData
 from app.dependencies import retornar_usuario_atual
@@ -58,4 +59,4 @@ def confirmar_email(token: str, session: SessionDep):
     usuario.is_active = True
     session.commit()
 
-    return {"msg": "Email confirmado com sucesso!"}
+    return RedirectResponse(url="http://150.165.85.125:3000", status_code=302)
