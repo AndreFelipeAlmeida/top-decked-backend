@@ -33,7 +33,6 @@ class Usuario(UsuarioBase, table=True):
 
     def set_email(self, email : str, session: SessionDep):
         try:
-            # Olhar o que é esse va;od
             valid = validate_email(email)
             num_usuarios = session.scalar(select(func.count(Usuario.id)).where(Usuario.email == email))
 
@@ -86,7 +85,8 @@ class LojaBase(SQLModel):
     endereco: str = Field(default=None, index=True)
     telefone: Optional[str] = Field(default=None, nullable=True)
     site: Optional[str] = Field(default=None, nullable=True)
-
+    banner: Optional[str] = Field(default=None, unique=True)
+    
 
 class Loja(LojaBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -144,7 +144,7 @@ class TorneioBase(SQLModel):
     tipo: Optional[str] = Field(default="Desconhecido", nullable=True)
     taxa: float = Field(default=0)
     premio: Optional[str] = Field(default=None, nullable=True)
-    n_rodadadas: int = Field(default=0)
+    n_rodadas: int = Field(default=0)
     rodada_atual: int = Field(default=0)
     regra_basica_id: Optional[int] = Field(
         default=None, foreign_key="tipojogador.id", nullable=True)

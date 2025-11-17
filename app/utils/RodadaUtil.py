@@ -53,11 +53,11 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
         session.add(nova_rodada)
         
         jogando[jogador.jogador_id] = True
-        jogador_vde = retornar_vde_jogador(session, jogador, torneio)
+        jogador_vde = retornar_vde_jogador(session, jogador.jogador_id, torneio)
         
         if adversario:
             jogando[adversario.jogador_id] = True
-            adversario_vde = retornar_vde_jogador(session, adversario, torneio)
+            adversario_vde = retornar_vde_jogador(session, adversario.jogador_id, torneio)
             adversario = session.exec(select(Jogador)
                                         .where(Jogador.pokemon_id == adversario.jogador_id)).first()
         
@@ -65,24 +65,26 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
         jogador = session.exec(select(Jogador)
                                 .where(Jogador.pokemon_id == jogador.jogador_id)).first()
         
-        result[mesa_livre] = [
+        result[str(nova_rodada.id)] = [
             {
-                "jogador_id" : jogador.pokemon_id,
-                "usuario_id" : jogador.usuario_id,
-                "jogador_nome" : jogador.nome,
-                **jogador_vde
-            }, 
-            {
-                "jogador_id": adversario.pokemon_id,
-                "usuario_id": adversario.usuario_id,
-                "jogador_nome": adversario.nome,
-                **adversario_vde
-            } if adversario else {}
+                "mesa": mesa_livre,
+                "jogador1" : {
+                    "jogador_id" : jogador.pokemon_id,
+                    "usuario_id" : jogador.usuario_id,
+                    "jogador_nome" : jogador.nome,
+                    **jogador_vde
+                },
+                "jogador2" : { 
+                    "jogador_id": adversario.pokemon_id,
+                    "usuario_id": adversario.usuario_id,
+                    "jogador_nome": adversario.nome,
+                    **adversario_vde
+                } if adversario else {}
+            }
         ]
 
         mesa_livre += 1
             
     torneio.rodada_atual = rodada_atual
     session.add(torneio)
-    
     return result

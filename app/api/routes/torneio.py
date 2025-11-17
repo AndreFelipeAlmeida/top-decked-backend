@@ -18,6 +18,40 @@ router = APIRouter(
     prefix="/lojas/torneios",
     tags=["Torneios"])
 
+@router.put("/rodadas/finalizar")
+def finalizar_varias_rodadas(
+    resultados: list[dict],
+    session: SessionDep
+):
+    for item in resultados:
+        rodada_id = item.get("id_rodada")
+        vencedor_id = item.get("id_vencedor")
+
+        rodada = session.get(Rodada, rodada_id)
+        if not rodada:
+            raise TopDeckedException.not_found(f"Rodada {rodada_id} não encontrada")
+
+        if rodada.finalizada:
+            raise TopDeckedException.bad_request(f"Rodada {rodada_id} já finalizada")
+
+        torneio = session.get(Torneio, rodada.torneio_id)
+        if not torneio:
+            raise TopDeckedException.not_found("Torneio não encontrado")
+
+        if vencedor_id is not None and vencedor_id not in [rodada.jogador1_id, rodada.jogador2_id]:
+            raise TopDeckedException.bad_request(
+                f"Jogador {vencedor_id} não pertence à rodada {rodada_id}"
+            )
+
+        rodada.vencedor = vencedor_id
+        rodada.finalizada = True
+        calcular_pontuacao_rodada(session, rodada, torneio.regra_basica)
+        session.add(rodada)
+
+    session.commit()
+    top_ranking = get_torneio_top(session, torneio.id)
+
+    return {"ranking": top_ranking}
 
 @router.post("/importar", response_model=TorneioPublico)
 def importar_torneios(session: SessionDep, arquivo: UploadFile, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
@@ -69,7 +103,7 @@ def iniciar_torneio(session: SessionDep, torneio_id: str,
         raise TopDeckedException.forbidden()
     if not torneio.status == StatusTorneio.ABERTO:
         raise TopDeckedException.bad_request("Torneio não pode ser iniciado")
-    if not torneio.regra_basica_id:
+    if not torneio.regra_basica_id and not regra_basica_id:
         raise TopDeckedException.bad_request("Torneio está sem regra básica")
     
     if pontuacao_de_participacao:
@@ -142,9 +176,9 @@ def editar_torneio(session: SessionDep,
     torneio = session.get(Torneio, torneio_id)
     
     if not torneio:
-        TopDeckedException.not_found("Torneio não existe")
+        raise TopDeckedException.not_found("Torneio não existe")
     if not torneio.loja_id == loja.id:
-        TopDeckedException.forbidden()
+        raise TopDeckedException.forbidden()
         
     dados_para_atualizar = torneio_atualizar.model_dump(
             exclude={"regras_adicionais"}, exclude_unset=True)
@@ -243,38 +277,3 @@ def desinscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annot
 
     session.delete(inscricao)
     session.commit()
-
-@router.put("/rodadas/finalizar")
-def finalizar_varias_rodadas(
-    resultados: list[dict],
-    session: SessionDep
-):
-    for item in resultados:
-        rodada_id = item.get("id_rodada")
-        vencedor_id = item.get("id_vencedor")
-
-        rodada = session.get(Rodada, rodada_id)
-        if not rodada:
-            raise TopDeckedException.not_found(f"Rodada {rodada_id} não encontrada")
-
-        if rodada.finalizada:
-            raise TopDeckedException.bad_request(f"Rodada {rodada_id} já finalizada")
-
-        torneio = session.get(Torneio, rodada.torneio_id)
-        if not torneio:
-            raise TopDeckedException.not_found("Torneio não encontrado")
-
-        if vencedor_id is not None and vencedor_id not in [rodada.jogador1_id, rodada.jogador2_id]:
-            raise TopDeckedException.bad_request(
-                f"Jogador {vencedor_id} não pertence à rodada {rodada_id}"
-            )
-
-        rodada.vencedor = vencedor_id
-        rodada.finalizada = True
-        calcular_pontuacao_rodada(session, rodada, torneio.regra_basica)
-        session.add(rodada)
-
-    session.commit()
-    top_ranking = get_torneio_top(session, torneio.id)
-
-    return {"ranking": top_ranking}
