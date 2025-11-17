@@ -150,7 +150,9 @@ def _descobrir_oponente(rodada: Rodada, jogador: str):
     return oponente
 
 def _processar_rodada(oponentes_salvos: dict, rodada: Rodada, jogador: str, oponente : str):
-    if rodada.vencedor == oponente:
+    if oponente == "bye":
+        oponentes_salvos[oponente]["vitorias"] += 1
+    elif rodada.vencedor == oponente:
         oponentes_salvos[oponente]["derrotas"] += 1
     elif rodada.vencedor == jogador:
         oponentes_salvos[oponente]["vitorias"] += 1
