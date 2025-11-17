@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 import jwt
 from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from sqlmodel import select
 
@@ -13,8 +13,25 @@ from app.core.db import SessionDep, get_session
 from app.core.exception import TopDeckedException
 from app.utils.datetimeUtil import agora_brasil
 from fastapi.security import OAuth2PasswordBearer
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 
 import os
+
+conf = ConnectionConfig(
+    MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
+    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
+    MAIL_FROM=os.getenv("MAIL_FROM"),
+    MAIL_PORT=587,
+    MAIL_SERVER="smtp.gmail.com",
+
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
+
+    USE_CREDENTIALS=True,
+    VALIDATE_CERTS=True
+)
+
+fastmail = FastMail(conf)
 
 SECRET_KEY = os.getenv("SECURITY_SECRET_KEY")
 ALGORITHM = os.getenv("SECURITY_ALGORITHM")
@@ -55,6 +72,9 @@ def autenticar(email: str, forms_senha: str, session: SessionDep) -> Usuario | N
     db_user = retornar_usuario_pelo_email(session=session, email=email)
     if not db_user or not verificar_senha(forms_senha, db_user.senha):
         raise TopDeckedException.unauthorized()
+    if not db_user.is_active:
+        raise TopDeckedException.bad_request("Email não confirmado. Verifique sua caixa de entrada.")
+
     return db_user
 
 
