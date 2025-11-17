@@ -131,8 +131,10 @@ def calcula_ranking_geral_por_loja(session: SessionDep, mes: int = None):
 def desempenho_por_formato(session: SessionDep, jogador: Jogador) -> list[RankingPorFormato]:
     links = session.exec(
         select(JogadorTorneioLink)
-        .join(JogadorTorneioLink.torneio)
-        .where(JogadorTorneioLink.jogador_id == jogador.pokemon_id)
+        .join(Torneio)
+        .where(
+            (Torneio.status == StatusTorneio.FINALIZADO) &
+            (JogadorTorneioLink.jogador_id == jogador.pokemon_id))
     ).all()
 
     if not links:
@@ -151,7 +153,7 @@ def desempenho_por_formato(session: SessionDep, jogador: Jogador) -> list[Rankin
         rodadas = session.exec(
             select(Rodada).where(
                 (Rodada.torneio_id == link.torneio_id) &
-                ((Rodada.jogador1_id == jogador.pokemon_id) or
+                ((Rodada.jogador1_id == jogador.pokemon_id) |
                  (Rodada.jogador2_id == jogador.pokemon_id))
             )
         ).all()

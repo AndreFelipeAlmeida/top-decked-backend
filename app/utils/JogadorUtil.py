@@ -232,12 +232,12 @@ def retornar_todas_rodadas(session: SessionDep, jogador: Jogador):
         oponente = session.exec(select(Jogador)
                                 .where(Jogador.pokemon_id == (_descobrir_oponente(rodada, jogador.pokemon_id)))).first()
 
-        if rodada.vencedor == jogador.pokemon_id:
-            resultado = "vitoria"
-        elif not rodada.vencedor:
+        if rodada.vencedor and rodada.vencedor != jogador.pokemon_id:
+            resultado = "derrota"
+        elif rodada.jogador1_id and rodada.jogador2_id and not rodada.vencedor:
             resultado = "empate"
         else:
-            resultado = "derrota"
+            resultado = "vitoria"
         torneio = session.get(Torneio, rodada.torneio_id)
         result.append({
             "data": rodada.data_de_inicio,
