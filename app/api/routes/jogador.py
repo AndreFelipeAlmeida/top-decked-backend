@@ -1,6 +1,4 @@
-import json
-from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from sqlmodel import select
 from app.schemas.Jogador import JogadorPublico, JogadorUpdate, JogadorCriar
 from app.core.db import SessionDep, Carta
@@ -12,19 +10,21 @@ from app.models import Usuario, Jogador, JogadorTorneioLink, Rodada
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.JogadorUtil import calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas
 from app.utils.datetimeUtil import data_agora_brasil
+from app.utils.emailUtil import criar_token_confirmacao
 from app.dependencies import retornar_jogador_atual
 from typing import Annotated
 import os
+
+from app.core.security import fastmail
+from fastapi_mail import MessageSchema
 
 router = APIRouter(
     prefix="/jogadores",
     tags=["Jogadores"])
 
 @router.post("/", response_model=JogadorPublico)
-def create_jogador(jogador: JogadorCriar, session: SessionDep):
+async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Request):
     verificar_novo_usuario(jogador.email, session)
-
-
     novo_usuario = Usuario(
         email=jogador.email,
         tipo="jogador",
@@ -44,6 +44,27 @@ def create_jogador(jogador: JogadorCriar, session: SessionDep):
     session.add(db_jogador)
     session.commit()
     session.refresh(db_jogador)
+
+    token = criar_token_confirmacao(db_jogador.usuario.email)
+    link = f"{request.base_url}login/confirmar-email?token={token}"
+
+    mensagem = MessageSchema(
+        subject="Confirme seu email",
+        recipients=[db_jogador.usuario.email],
+        body = (
+            "Olá!\n\n"
+            "Obrigado por se cadastrar na TopDecked.\n"
+            "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
+            f"{link}\n\n"
+            "Se você não criou uma conta, ignore esta mensagem.\n\n"
+            "Atenciosamente,\n"
+            "Equipe TopDecked"
+        ),
+        subtype="plain"
+    )
+
+    await fastmail.send_message(mensagem)
+
     return db_jogador
 
 @router.get("/cartas", response_model=List[Carta])
