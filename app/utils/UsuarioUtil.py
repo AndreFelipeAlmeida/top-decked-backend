@@ -25,6 +25,7 @@ def retornar_info_por_usuario(usuario: Usuario, session: SessionDep) -> dict:
     
     if usuario.tipo == "jogador":
         linha_db_info = session.exec(select(Jogador).where(Jogador.usuario_id == usuario.id)).first()
+        infos["pokemon_id"] = linha_db_info.pokemon_id
     else:
         linha_db_info = session.exec(select(Loja).where(Loja.usuario_id == usuario.id)).first()
         infos["endereco"] = linha_db_info.endereco

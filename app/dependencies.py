@@ -26,7 +26,9 @@ async def retornar_usuario_atual(token: Annotated[str, Depends(OAUTH2_SCHEME)]):
 
     if tipo == "loja":
         token_data.endereco = payload.get("endereco")
-
+    else:
+        token_data.pokemon_id = payload.get("pokemon_id")
+        
     return token_data
 
 
