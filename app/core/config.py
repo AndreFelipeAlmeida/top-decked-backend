@@ -2,9 +2,6 @@ from typing import List, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 import os
-from dotenv import load_dotenv
-
-load_dotenv(override=True)
 
 
 class Settings(BaseSettings):
