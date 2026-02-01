@@ -3,10 +3,15 @@ from app.models import LojaBase
 from app.schemas.Usuario import UsuarioPublico
 
 
+class LojaPublicoTorneios(LojaBase):
+    id: int
+    usuario: UsuarioPublico
+    n_torneios: int = 0
+    
+    
 class LojaPublico(LojaBase):
     id: int
     usuario: UsuarioPublico
-    
 
 class LojaCriar(LojaBase):
     email: str | None = Field(default=None)

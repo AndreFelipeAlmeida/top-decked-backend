@@ -26,3 +26,4 @@ class TopDeckedException:
         return HTTPException(
             status_code=404, 
             detail=message)
+    

@@ -38,3 +38,8 @@ class StatusTorneio(str, Enum):
     ABERTO = "ABERTO"
     EM_ANDAMENTO = "EM_ANDAMENTO"
     FINALIZADO = "FINALIZADO"
+
+
+class CategoriaItem(str, Enum):
+    CANTINA = "CANTINA"
+    GERAIS = "GERAIS"
