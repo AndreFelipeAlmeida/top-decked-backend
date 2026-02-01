@@ -6,9 +6,7 @@ import uvicorn
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
 import os
-load_dotenv(override=True)
 
 
 @asynccontextmanager

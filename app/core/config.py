@@ -2,6 +2,9 @@ from typing import List, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 
 class Settings(BaseSettings):
@@ -32,7 +35,6 @@ class Settings(BaseSettings):
 
     def __init__(self, **values):
         super().__init__(**values)
-
         if not self.DEBUG:
             db_user = os.getenv("DB_USER")
             db_password = os.getenv("DB_PASSWORD")

@@ -7,7 +7,6 @@ import uuid
 from app.core.config import settings
 import os
 
-
 engine = create_engine(settings.DATABASE_URL, echo=True)
 
 cartas = [
