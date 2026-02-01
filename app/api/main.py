@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import loja, jogador, login, torneio, tipoJogador, ranking
+from app.api.routes import loja, jogador, login, torneio, tipoJogador, ranking, item, estoque
 
 
 api_router = APIRouter()
@@ -10,3 +10,5 @@ api_router.include_router(login.router)
 api_router.include_router(torneio.router)
 api_router.include_router(ranking.router)
 api_router.include_router(tipoJogador.router)
+api_router.include_router(item.router)
+api_router.include_router(estoque.router)

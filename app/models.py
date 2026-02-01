@@ -185,14 +185,14 @@ class Torneio(TorneioBase, table=True):
 # ---------------------------------- Estoque ----------------------------------
 
 
-class Item(table=True):
+class Item(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     nome: str = Field(default=None)
     categoria: CategoriaItem = Field(sa_column=Column(
         Enum(CategoriaItem)), default=CategoriaItem.GERAIS)
 
 
-class Estoque(table=True):
+class Estoque(SQLModel, table=True):
     item_id: int | None = Field(
         default=None, foreign_key="item.id", primary_key=True)
     loja_id: int | None = Field(
