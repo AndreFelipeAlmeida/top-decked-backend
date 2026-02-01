@@ -1,5 +1,5 @@
-from typing import List
-from pydantic_settings import BaseSettings
+from typing import List, Optional, Union
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 import os
 
@@ -8,40 +8,48 @@ class Settings(BaseSettings):
     API_PREFIX: str = '/api'
     DEBUG: bool = False
 
-    DATABASE_URL: str = None
-    ALLOWED_ORIGINS: str = ""
+    DATABASE_URL: Optional[str] = ""
+    ALLOWED_ORIGINS: Union[str, List[str]] = ""
 
     SECURITY_SECRET_KEY: str = ""
     SECURITY_ALGORITHM: str = "HS256"
     SECURITY_TOKEN_EXPIRATION: int = 30
     POKEMONTCG_IO_API_KEY: str = ""
 
-    # Email
     MAIL_USERNAME: str = ""
     MAIL_PASSWORD: str = ""
     MAIL_FROM: str = ""
 
-    # Frontend
     FRONTEND_URL: str = ""
     FRONTEND_PORT: str = ""
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"
+    )
+
     def __init__(self, **values):
         super().__init__(**values)
+
         if not self.DEBUG:
             db_user = os.getenv("DB_USER")
             db_password = os.getenv("DB_PASSWORD")
             db_host = os.getenv("DB_HOST")
-            db_port = os.getenv("DB_PORT")
+            db_port = os.getenv("DB_PORT", "5432")
             db_name = os.getenv("DB_NAME")
+
             if all([db_user, db_password, db_host, db_name]):
                 self.DATABASE_URL = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
-            # Segurança e APIs
+            # Segurança e APIs (Sobrescreve apenas se existir no ambiente)
             self.SECURITY_SECRET_KEY = os.getenv(
                 "SECURITY_SECRET_KEY", self.SECURITY_SECRET_KEY)
-            self.SECURITY_ALGORITHM = os.getenv("SECURITY_ALGORITHM", "HS256")
+            self.SECURITY_ALGORITHM = os.getenv(
+                "SECURITY_ALGORITHM", self.SECURITY_ALGORITHM)
             self.SECURITY_TOKEN_EXPIRATION = int(
-                os.getenv("SECURITY_TOKEN_EXPIRATION", "30"))
+                os.getenv("SECURITY_TOKEN_EXPIRATION", str(self.SECURITY_TOKEN_EXPIRATION)))
             self.POKEMONTCG_IO_API_KEY = os.getenv(
                 "POKEMONTCG_IO_API_KEY", self.POKEMONTCG_IO_API_KEY)
 
@@ -56,14 +64,11 @@ class Settings(BaseSettings):
             self.ALLOWED_ORIGINS = os.getenv(
                 "ALLOWED_ORIGINS", self.ALLOWED_ORIGINS)
 
-    @field_validator("ALLOWED_ORIGINS")
-    def parse_allowed_origins(cls, v: str) -> List[str]:
-        return v.split(",") if v else []
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    def parse_allowed_origins(cls, v):
+        if isinstance(v, str):
+            return v.split(",") if v else []
+        return v
 
 
 settings = Settings()
