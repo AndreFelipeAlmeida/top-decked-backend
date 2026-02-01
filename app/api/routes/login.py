@@ -17,10 +17,8 @@ from jose import jwt
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models import Usuario
 from sqlmodel import select
-import os
+from app.core.config import settings
 
-FRONTEND_URL = os.getenv("FRONTEND_URL")
-FRONTEND_PORT = os.getenv("FRONTEND_PORT")
 
 router = APIRouter(
     prefix="/login",
@@ -66,4 +64,4 @@ def confirmar_email(token: str, session: SessionDep):
     usuario.is_active = True
     session.commit()
 
-    return RedirectResponse(url=F"http://{FRONTEND_URL}:{FRONTEND_PORT}", status_code=302)
+    return RedirectResponse(url=F"http://{settings.FRONTEND_URL}:{settings.FRONTEND_PORT}", status_code=302)

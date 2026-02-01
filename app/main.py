@@ -1,15 +1,14 @@
+from app.core.config import settings
+from app.core.db import create_db_and_tables, inserir_cartas
+from app.api.main import api_router
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import os
 load_dotenv(override=True)
-
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-import uvicorn
-from fastapi.middleware.cors import CORSMiddleware
-
-from app.api.main import api_router
-from app.core.db import create_db_and_tables, inserir_cartas
 
 
 @asynccontextmanager
@@ -22,12 +21,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 UPLOAD_DIR = "app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True) 
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
