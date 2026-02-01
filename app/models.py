@@ -195,3 +195,14 @@ class Estoque(SQLModel, table=True):
     preco: float = Field(default=0)
     quantidade: int = Field(default=0)
     min_quantidade: int = Field(default=0)
+
+
+# ---------------------------------- Créditos ----------------------------------
+
+
+class Credito(SQLModel, table=True):
+    jogador_id: int | None = Field(
+        default=None, foreign_key="jogador.id", primary_key=True)
+    loja_id: int | None = Field(
+        default=None, foreign_key="loja.id", primary_key=True)
+    quantidade: float = Field(default=0)
