@@ -17,9 +17,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan,
-              openapi_url="/api/openapi.json",
-              docs_url="/api/docs",
-              redoc_url="/api/redoc")
+              openapi_url=f"{settings.API_PREFIX}/openapi.json",
+              docs_url=f"{settings.API_PREFIX}/docs",
+              redoc_url=f"{settings.API_PREFIX}/redoc")
 
 UPLOAD_DIR = "app/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)

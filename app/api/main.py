@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 from app.api.routes import loja, jogador, login, torneio, tipoJogador, ranking, estoque, credito
+from app.core.config import settings
 
-
-api_router = APIRouter(prefix="/api")
+api_router = APIRouter(prefix={settings.API_PREFIX})
 
 api_router.include_router(jogador.router)
 api_router.include_router(loja.router)
