@@ -43,6 +43,7 @@ class Settings(BaseSettings):
                 self.DATABASE_URL = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
             # Segurança e APIs (Sobrescreve apenas se existir no ambiente)
+            self.API_PREFIX = os.getenv("API_PREFIX", self.API_PREFIX)
             self.SECURITY_SECRET_KEY = os.getenv(
                 "SECURITY_SECRET_KEY", self.SECURITY_SECRET_KEY)
             self.SECURITY_ALGORITHM = os.getenv(
