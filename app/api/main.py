@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from app.api.routes import loja, jogador, login, torneio, tipoJogador, ranking, estoque, credito
 
 
-api_router = APIRouter()
+api_router = APIRouter(prefix="/api")
 
 api_router.include_router(jogador.router)
 api_router.include_router(loja.router)
