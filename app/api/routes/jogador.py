@@ -47,7 +47,7 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
     session.refresh(db_jogador)
 
     token = criar_token_confirmacao(db_jogador.usuario.email)
-    link = f"{request.base_url}login/confirmar-email?token={token}"
+    link = f"{request.base_url}/api/login/confirmar-email?token={token}"
 
     mensagem = MessageSchema(
         subject="Confirme seu email",
