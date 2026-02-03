@@ -23,17 +23,18 @@ router = APIRouter(
     prefix="/lojas",
     tags=["Lojas"])
 
+
 @router.post("/", response_model=LojaPublico)
 async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
     verificar_novo_usuario(loja.email, session)
-    
+
     novo_usuario = Usuario(
         email=loja.email,
         tipo="loja",
         data_cadastro=data_agora_brasil()
     )
     novo_usuario.set_senha(loja.senha)
-    
+
     session.add(novo_usuario)
     session.commit()
     session.refresh(novo_usuario)
@@ -45,18 +46,18 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
         site=loja.site,
         usuario=novo_usuario
     )
-    
+
     session.add(db_loja)
     session.commit()
     session.refresh(db_loja)
 
     token = criar_token_confirmacao(db_loja.usuario.email)
-    link = f"{request.base_url}login/confirmar-email?token={token}"
+    link = f"{request.base_url}api/login/confirmar-email?token={token}"
 
     mensagem = MessageSchema(
         subject="Confirme seu email",
         recipients=[db_loja.usuario.email],
-        body = (
+        body=(
             "Olá!\n\n"
             "Obrigado por se cadastrar na TopDecked.\n"
             "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
@@ -81,7 +82,7 @@ def retornar_lojas(session: SessionDep):
     for loja in lojas:
         qtd_torneios = session.scalar(select(func.count(Torneio.id))
                                       .where((Torneio.loja_id == loja.id)
-                                  & (Torneio.status == StatusTorneio.FINALIZADO)))
+                                             & (Torneio.status == StatusTorneio.FINALIZADO)))
 
         loja_publico = LojaPublicoTorneios.model_validate(loja)
 
@@ -102,7 +103,7 @@ def retornar_loja(loja_id: int, session: SessionDep):
 @router.put("/", response_model=LojaPublico)
 def atualizar_loja(token_data: Annotated[TokenData, Depends(retornar_loja_atual)], loja_atualizar: LojaAtualizar, session: SessionDep):
     loja_db = session.get(Loja, token_data.id)
-    
+
     if not loja_db:
         raise TopDeckedException.not_found("Loja não encontrada")
 
@@ -110,16 +111,18 @@ def atualizar_loja(token_data: Annotated[TokenData, Depends(retornar_loja_atual)
         loja_db.usuario.set_email(loja_atualizar.email, session)
     if loja_atualizar.senha:
         loja_db.usuario.set_senha(loja_atualizar.senha)
-        
+
     session.add(loja_db.usuario)
 
-    loja_data = loja_atualizar.model_dump(exclude_unset=True, exclude={"senha", "email"})
+    loja_data = loja_atualizar.model_dump(
+        exclude_unset=True, exclude={"senha", "email"})
     loja_db.sqlmodel_update(loja_data)
     session.add(loja_db)
     session.commit()
     session.refresh(loja_db)
-    
+
     return loja_db
+
 
 @router.delete("/{loja_id}")
 def apagar_loja(loja_id: int, session: SessionDep):
@@ -130,17 +133,19 @@ def apagar_loja(loja_id: int, session: SessionDep):
     session.commit()
     return {"ok": True}
 
+
 @router.post("/upload_foto", response_model=LojaPublico)
-def update_foto(session: SessionDep, 
-                token_data : Annotated[TokenData, Depends(retornar_loja_atual)],
+def update_foto(session: SessionDep,
+                token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
                 file: UploadFile = File(None)):
-    
+
     loja = session.get(Loja, token_data.id)
-    
+
     if not loja:
         raise TopDeckedException.not_found("Loja nao encontrado")
-    
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    BASE_DIR = os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
     UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -154,30 +159,35 @@ def update_foto(session: SessionDep,
         session.commit()
     return loja
 
+
 @router.get("/usuario/{usuario_id}", response_model=LojaPublico)
 def retornar_jogador_pelo_usuario(usuario_id: int, session: SessionDep):
-    jogador = session.exec(select(Loja).where(Loja.usuario_id == usuario_id)).first()
+    jogador = session.exec(select(Loja).where(
+        Loja.usuario_id == usuario_id)).first()
     if not jogador:
         raise TopDeckedException.not_found("Loja nao encontrado")
-    
-    return jogador  
+
+    return jogador
+
 
 @router.post("/upload_banner", response_model=LojaPublico)
-def update_banner(session: SessionDep, 
-                token_data : Annotated[TokenData, Depends(retornar_loja_atual)],
-                file: UploadFile = File(None)):
-    
+def update_banner(session: SessionDep,
+                  token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
+                  file: UploadFile = File(None)):
+
     loja = session.get(Loja, token_data.id)
-    
+
     if not loja:
         raise TopDeckedException.not_found("Loja nao encontrado")
-    
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    BASE_DIR = os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
     UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     if file:
         ext = file.filename.split(".")[-1]
-        file_path = os.path.join(UPLOAD_DIR, f"user_{loja.usuario.id}_banner.{ext}")
+        file_path = os.path.join(
+            UPLOAD_DIR, f"user_{loja.usuario.id}_banner.{ext}")
         with open(file_path, "wb") as f:
             f.write(file.file.read())
         loja.banner = f"user_{loja.usuario.id}_banner.{ext}"
