@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     MAIL_PASSWORD: str = ""
     MAIL_FROM: str = ""
 
-    FRONTEND_URL: str = ""
-    FRONTEND_PORT: str = ""
+    BACKEND_URL: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -59,8 +58,7 @@ class Settings(BaseSettings):
             self.MAIL_FROM = os.getenv("MAIL_FROM", self.MAIL_FROM)
 
             # Frontend
-            self.FRONTEND_URL = os.getenv("FRONTEND_URL", self.FRONTEND_URL)
-            self.FRONTEND_PORT = os.getenv("FRONTEND_PORT", self.FRONTEND_PORT)
+            self.BACKEND_URL = os.getenv("BACKEND_URL", self.BACKEND_URL)
             self.ALLOWED_ORIGINS = os.getenv(
                 "ALLOWED_ORIGINS", self.ALLOWED_ORIGINS)
 

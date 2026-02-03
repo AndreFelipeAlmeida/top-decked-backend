@@ -64,4 +64,4 @@ def confirmar_email(token: str, session: SessionDep):
     usuario.is_active = True
     session.commit()
 
-    return RedirectResponse(url=F"http://{settings.FRONTEND_URL}:{settings.FRONTEND_PORT}", status_code=302)
+    return RedirectResponse(url=F"http://{settings.BACKEND_URL}", status_code=302)
