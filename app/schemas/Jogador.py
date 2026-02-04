@@ -16,7 +16,15 @@ class JogadorPublico(JogadorBase):
     data_nascimento: date | None
 
 
-class JogadorLojaPublico(JogadorPublico):
+class LojaCriarJogador(BaseModel):
+    nome: str
+    pokemon_id: str
+
+
+class JogadorLojaPublico(BaseModel):
+    id: int
+    nome: str
+    pokemon_id: str | None
     creditos: float
 
 

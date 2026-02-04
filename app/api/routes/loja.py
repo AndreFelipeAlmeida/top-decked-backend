@@ -5,7 +5,8 @@ from sqlalchemy import JSON, func
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
-from app.models import Loja, Torneio
+from app.schemas.Jogador import LojaCriarJogador
+from app.models import Loja, Torneio, Jogador, Credito
 from app.models import Usuario
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
@@ -194,3 +195,28 @@ def update_banner(session: SessionDep,
         session.add(loja.usuario)
         session.commit()
     return loja
+
+
+@router.post("/criar-jogador", response_model=LojaCriarJogador)
+def loja_criar_jogador(novo_jogador: LojaCriarJogador,
+                       token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
+                       session: SessionDep):
+    jogador_existente = session.exec(select(Jogador).where(
+        novo_jogador.pokemon_id == Jogador.pokemon_id)).first()
+
+    if jogador_existente:
+        raise TopDeckedException.bad_request("Jogador já existe")
+
+    novo_jogador = Jogador(nome=novo_jogador.nome,
+                           pokemon_id=novo_jogador.pokemon_id)
+    session.add(novo_jogador)
+    session.commit()
+    session.refresh(novo_jogador)
+
+    novo_creditos = Credito(jogador_id=novo_jogador.id,
+                            loja_id=token_data.id, quantidade=0)
+    session.add(novo_creditos)
+    session.commit()
+    session.refresh(novo_creditos)
+
+    return novo_jogador

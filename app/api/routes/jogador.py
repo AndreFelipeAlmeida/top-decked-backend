@@ -97,10 +97,7 @@ def retornar_rodadas(session: SessionDep,
 def get_jogadores_por_loja(session: SessionDep, token_data: Annotated[TokenData, Depends(retornar_loja_atual)]):
     statement = (
         select(Jogador, Credito.quantidade)
-        .join(JogadorTorneioLink, Jogador.pokemon_id == JogadorTorneioLink.jogador_id)
-        .join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
-        .outerjoin(Credito, (Credito.jogador_id == Jogador.id) & (Credito.loja_id == token_data.id))
-        .where(Torneio.loja_id == token_data.id)
+        .join(Credito, (Credito.loja_id == token_data.id) & (Jogador.id == Credito.jogador_id))
         .distinct()
     )
 
@@ -109,9 +106,6 @@ def get_jogadores_por_loja(session: SessionDep, token_data: Annotated[TokenData,
     jogadores_formatados = []
     for jogador, qtd_credito in results:
         jogador_data = jogador.model_dump()
-        if jogador.usuario:
-            jogador_data["usuario"] = jogador.usuario.model_dump()
-
         jogador_data["creditos"] = qtd_credito or 0
         jogadores_formatados.append(jogador_data)
 
