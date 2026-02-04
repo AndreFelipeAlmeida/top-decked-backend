@@ -27,7 +27,7 @@ def create_credito(credito_create: CreditoCreate, session: SessionDep, loja: Ann
 def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, Depends(retornar_jogador_atual)]):
     creditos = session.exec(select(Credito, Loja)
                             .join(Loja, Loja.id == Credito.loja_id)
-                            .where(Credito.jogador_id == loja.id)).all()
+                            .where(Credito.jogador_id == jogador.id)).all()
 
     creditos_formatados = []
 

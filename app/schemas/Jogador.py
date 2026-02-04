@@ -43,7 +43,8 @@ class JogadorUpdate(JogadorBase):
     data_nascimento: date | None = None
 
 
-class JogadorCriar(JogadorBase):
+class JogadorCriar(BaseModel):
+    nome: str | None = Field(default=None)
     email: str | None = Field(default=None)
     senha: str | None = Field(default=None)
 

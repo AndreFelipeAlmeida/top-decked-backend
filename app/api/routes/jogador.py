@@ -39,8 +39,6 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
     db_jogador = Jogador(
         nome=jogador.nome,
         usuario=novo_usuario,
-        telefone=jogador.telefone,
-        data_nascimento=jogador.data_nascimento
     )
     session.add(db_jogador)
     session.commit()
