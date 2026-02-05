@@ -204,14 +204,12 @@ def loja_criar_jogador(novo_jogador: LojaCriarJogador,
     jogador_existente = session.exec(select(Jogador).where(
         novo_jogador.pokemon_id == Jogador.pokemon_id)).first()
 
-    if jogador_existente:
-        raise TopDeckedException.bad_request("Jogador já existe")
-
-    novo_jogador = Jogador(nome=novo_jogador.nome,
-                           pokemon_id=novo_jogador.pokemon_id)
-    session.add(novo_jogador)
-    session.commit()
-    session.refresh(novo_jogador)
+    if not jogador_existente:
+        novo_jogador = Jogador(nome=novo_jogador.nome,
+                               pokemon_id=novo_jogador.pokemon_id)
+        session.add(novo_jogador)
+        session.commit()
+        session.refresh(novo_jogador)
 
     novo_creditos = Credito(jogador_id=novo_jogador.id,
                             loja_id=token_data.id, quantidade=0)
