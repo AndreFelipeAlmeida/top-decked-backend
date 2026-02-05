@@ -201,20 +201,24 @@ def update_banner(session: SessionDep,
 def loja_criar_jogador(novo_jogador: LojaCriarJogador,
                        token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
                        session: SessionDep):
-    jogador_existente = session.exec(select(Jogador).where(
+    jogador = session.exec(select(Jogador).where(
         novo_jogador.pokemon_id == Jogador.pokemon_id)).first()
 
-    if not jogador_existente:
-        novo_jogador = Jogador(nome=novo_jogador.nome,
-                               pokemon_id=novo_jogador.pokemon_id)
-        session.add(novo_jogador)
+    if not jogador:
+        jogador = Jogador(nome=novo_jogador.nome,
+                          pokemon_id=novo_jogador.pokemon_id)
+        session.add(jogador)
         session.commit()
-        session.refresh(novo_jogador)
+        session.refresh(jogador)
 
-    novo_creditos = Credito(jogador_id=novo_jogador.id,
+    credito_existente = session.get(Credito, (jogador.id, token_data.id))
+    if credito_existente:
+        return TopDeckedException.bad_request("Jogador Já Registrado")
+
+    novo_creditos = Credito(jogador_id=jogador.id,
                             loja_id=token_data.id, quantidade=0)
     session.add(novo_creditos)
     session.commit()
     session.refresh(novo_creditos)
 
-    return novo_jogador
+    return jogador
