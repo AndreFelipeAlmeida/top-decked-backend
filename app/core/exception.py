@@ -1,12 +1,13 @@
 from fastapi import HTTPException
 
+
 class TopDeckedException:
     @staticmethod
     def bad_request(message: str):
         return HTTPException(
             status_code=400,
             detail=message)
-    
+
     @staticmethod
     def forbidden():
         return HTTPException(
@@ -15,15 +16,14 @@ class TopDeckedException:
             headers={"WWW-Authenticate": "Bearer"})
 
     @staticmethod
-    def unauthorized():
+    def unauthorized(message: str):
         return HTTPException(
             status_code=401,
-            detail="Permissão negada",
+            detail=message if message else "Permissão negada",
             headers={"WWW-Authenticate": "Bearer"})
 
     @staticmethod
     def not_found(message: str):
         return HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=message)
-    
