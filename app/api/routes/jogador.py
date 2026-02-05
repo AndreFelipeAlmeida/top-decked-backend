@@ -6,17 +6,16 @@ from typing import Annotated, List
 from app.core.security import TokenData
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
+from app.core.config import settings
 from app.models import Usuario, Jogador, JogadorTorneioLink, Torneio, Credito
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.JogadorUtil import calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.emailUtil import criar_token_confirmacao
+from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
 from app.dependencies import retornar_jogador_atual, retornar_loja_atual
 from typing import Annotated
 import os
 
-from app.core.security import fastmail
-from fastapi_mail import MessageSchema
 
 router = APIRouter(
     prefix="/jogadores",
@@ -40,30 +39,12 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
         nome=jogador.nome,
         usuario=novo_usuario,
     )
+
+    await processar_ativacao_usuario(db_jogador.usuario, request)
+
     session.add(db_jogador)
     session.commit()
     session.refresh(db_jogador)
-
-    token = criar_token_confirmacao(db_jogador.usuario.email)
-    link = f"{request.base_url}api/login/confirmar-email?token={token}"
-
-    mensagem = MessageSchema(
-        subject="Confirme seu email",
-        recipients=[db_jogador.usuario.email],
-        body=(
-            "Olá!\n\n"
-            "Obrigado por se cadastrar na TopDecked.\n"
-            "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
-            f"{link}\n\n"
-            "Se você não criou uma conta, ignore esta mensagem.\n\n"
-            "Atenciosamente,\n"
-            "Equipe TopDecked"
-        ),
-        subtype="plain"
-    )
-
-    await fastmail.send_message(mensagem)
-
     return db_jogador
 
 

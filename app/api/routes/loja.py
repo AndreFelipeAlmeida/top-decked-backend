@@ -10,7 +10,7 @@ from app.models import Loja, Torneio, Jogador, Credito
 from app.models import Usuario
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
-from app.utils.emailUtil import criar_token_confirmacao
+from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
 from app.utils.datetimeUtil import data_agora_brasil
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
@@ -48,30 +48,11 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
         usuario=novo_usuario
     )
 
+    await processar_ativacao_usuario(db_loja.usuario, request)
+
     session.add(db_loja)
     session.commit()
     session.refresh(db_loja)
-
-    token = criar_token_confirmacao(db_loja.usuario.email)
-    link = f"{request.base_url}api/login/confirmar-email?token={token}"
-
-    mensagem = MessageSchema(
-        subject="Confirme seu email",
-        recipients=[db_loja.usuario.email],
-        body=(
-            "Olá!\n\n"
-            "Obrigado por se cadastrar na TopDecked.\n"
-            "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
-            f"{link}\n\n"
-            "Se você não criou uma conta, ignore esta mensagem.\n\n"
-            "Atenciosamente,\n"
-            "Equipe TopDecked"
-        ),
-        subtype="plain"
-    )
-
-    await fastmail.send_message(mensagem)
-
     return db_loja
 
 
