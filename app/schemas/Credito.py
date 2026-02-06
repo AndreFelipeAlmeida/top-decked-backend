@@ -15,6 +15,10 @@ class CreditoAdd(SQLModel):
     novos_creditos: float
 
 
+class CreditoRemove(SQLModel):
+    retirar_creditos: float
+
+
 class CreditoJogador(Credito):
     nome_loja: str
     endereco: str

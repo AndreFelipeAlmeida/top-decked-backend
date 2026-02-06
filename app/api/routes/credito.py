@@ -5,7 +5,7 @@ from app.models import Credito, Loja
 from typing import List, Annotated
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
-from app.schemas.Credito import CreditoCreate, CreditoUpdate, CreditoAdd, CreditoJogador
+from app.schemas.Credito import CreditoCreate, CreditoUpdate, CreditoAdd, CreditoJogador, CreditoRemove
 
 router = APIRouter(
     prefix="/creditos",
@@ -58,6 +58,18 @@ def add_credito(jogador_id: int, data: CreditoAdd, session: SessionDep, loja: An
     session.add(credito)
     session.commit()
     session.refresh(credito)
+    return credito
+
+
+@router.patch("/{jogador_id}/remover-credito", response_model=Credito)
+def remover_credito(jogador_id: int, data: CreditoRemove, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
+    credito = session.get(Credito, (jogador_id, loja.id))
+    if credito:
+        credito.quantidade = max(0, credito.quantidade - data.retirar_creditos)
+        session.add(credito)
+        session.commit()
+        session.refresh(credito)
+
     return credito
 
 

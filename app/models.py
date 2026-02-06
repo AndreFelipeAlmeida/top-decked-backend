@@ -206,3 +206,25 @@ class Credito(SQLModel, table=True):
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id", primary_key=True)
     quantidade: float = Field(default=0)
+
+
+# ---------------------------------- Transações ----------------------------------
+
+
+class Transacao(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    jogador_id: int | None = Field(
+        default=None, foreign_key="jogador.id")
+    loja_id: int | None = Field(
+        default=None, foreign_key="loja.id")
+
+
+# ---------------------------------- Carrinho ----------------------------------
+
+
+class Carrinho(SQLModel, table=True):
+    transacao: int | None = Field(
+        default=None, foreign_key="transacao.id", primary_key=True)
+    estoque_id: int | None = Field(
+        default=None, foreign_key="estoque.id", primary_key=True)
+    quantidade: int = Field(default=1)
