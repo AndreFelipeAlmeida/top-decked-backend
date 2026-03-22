@@ -1,5 +1,5 @@
 from app.core.config import settings
-from app.core.db import create_db_and_tables, inserir_cartas
+from app.core.db import create_db_and_tables
 from app.api.main import api_router
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -12,7 +12,6 @@ import os
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
-    inserir_cartas()
     yield
 
 

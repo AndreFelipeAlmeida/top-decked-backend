@@ -6,8 +6,7 @@ from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
 from app.schemas.Jogador import LojaCriarJogador
-from app.models import Loja, Torneio, Jogador, Credito
-from app.models import Usuario
+from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
@@ -182,24 +181,26 @@ def update_banner(session: SessionDep,
 def loja_criar_jogador(novo_jogador: LojaCriarJogador,
                        token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
                        session: SessionDep):
-    jogador = session.exec(select(Jogador).where(
-        novo_jogador.pokemon_id == Jogador.pokemon_id)).first()
+    jogador = session.exec(select(Jogador)
+                           .join(GameID, GameID.jogador_id == Jogador.id)
+                           .where((GameID.id == novo_jogador.game_id.id)
+                                  & (GameID.tcg == novo_jogador.game_id.tcg))).first()
 
-    if not jogador:
-        jogador = Jogador(nome=novo_jogador.nome,
-                          pokemon_id=novo_jogador.pokemon_id)
-        session.add(jogador)
-        session.commit()
-        session.refresh(jogador)
-
-    credito_existente = session.get(Credito, (jogador.id, token_data.id))
-    if credito_existente:
-        return TopDeckedException.bad_request("Jogador Já Registrado")
-
-    novo_creditos = Credito(jogador_id=jogador.id,
-                            loja_id=token_data.id, quantidade=0)
-    session.add(novo_creditos)
+    novo_link = LojaJogadorLink(loja_id=token_data.id, 
+                                apelido=novo_jogador.nome, 
+                                quantidade=0)
+    
+    if jogador:
+        link = session.exec(select(LojaJogadorLink)
+                            .where((LojaJogadorLink.jogador_id == jogador.id) &
+                                (LojaJogadorLink.loja_id == token_data.id)))
+        if link:
+            raise TopDeckedException.bad_request("Jogador já cadastrado na sua loja!")
+        
+        novo_link.jogador_id = jogador.id 
+        
+    session.add(novo_link)
     session.commit()
-    session.refresh(novo_creditos)
+    session.refresh(novo_link)
 
-    return jogador
+    return novo_link

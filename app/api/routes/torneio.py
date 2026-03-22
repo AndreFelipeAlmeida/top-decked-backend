@@ -5,7 +5,7 @@ from app.utils.TorneioUtil import retornar_torneio_completo, editar_torneio_regr
 from app.utils.ImportacaoUtil import importar_torneio
 from app.utils.RodadaUtil import nova_rodada
 from app.schemas.Torneio import TorneioPublico, TorneioAtualizar
-from app.models import Torneio, TorneioBase, JogadorTorneioLink, Jogador, StatusTorneio, Rodada
+from app.models import Torneio, TorneioBase, JogadorTorneioLink, Jogador, StatusTorneio, Rodada, GameID
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
@@ -240,23 +240,31 @@ def get_torneio_por_loja(
 def inscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
     torneio = session.get(Torneio, torneio_id)
     jogador = session.get(Jogador, token_data.id)
+    
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
+    
     if torneio.status == StatusTorneio.FINALIZADO:
         raise TopDeckedException.bad_request("Torneio já finalizado")
-    if not jogador.pokemon_id:
+    
+    game_id = session.exec(select(GameID).where((GameID.jogador_id == jogador.id) &
+                                                (GameID.tcg == torneio.tcg)))
+    
+    if not game_id:
         raise TopDeckedException.bad_request(
-            "Jogador não possui um Pokémon ID vinculado")
-
-    link = session.get(JogadorTorneioLink, {"torneio_id": torneio.id,
-                                            "jogador_id": jogador.pokemon_id})
+            f"Jogador não possui um ID para {torneio.tcg} vinculado")
+        
+    link = session.exec(select(JogadorTorneioLink)
+                        .where((JogadorTorneioLink.jogador_id == jogador.id) &
+                                (JogadorTorneioLink.torneio_id == torneio.id)))
     if link:
         raise TopDeckedException.bad_request("Inscrição já realizada")
 
     inscricao = JogadorTorneioLink(
-        jogador_id=jogador.pokemon_id,
+        jogador_id=jogador.id,
+        apelido=jogador.nome,
         torneio_id=torneio.id,
-        regra_basica_id=torneio.regra_basica_id if torneio.regra_basica_id else None,
+        tipo_jogador_id=torneio.regra_basica_id if torneio.regra_basica_id else None,
     )
 
     session.add(inscricao)
@@ -277,7 +285,7 @@ def desinscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annot
         raise TopDeckedException.bad_request("Torneio já finalizado")
 
     inscricao = session.exec(select(JogadorTorneioLink).where(
-        JogadorTorneioLink.jogador_id == jogador.pokemon_id,
+        JogadorTorneioLink.jogador_id == jogador.id,
         JogadorTorneioLink.torneio_id == torneio.id
     )).first()
 

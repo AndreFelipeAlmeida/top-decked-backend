@@ -1,6 +1,6 @@
 from sqlmodel import select
 from app.core.db import SessionDep
-from app.models import Rodada, Torneio, Jogador, JogadorTorneioLink, TipoJogador
+from app.models import Rodada, Torneio, Jogador, JogadorTorneioLink, TipoJogador, GameID
 
 def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
     torneio_dict = torneio.model_dump()
@@ -8,10 +8,19 @@ def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
     torneio_dict["loja"] = torneio.loja
     torneio_dict["jogadores"] = []
     for link in torneio.jogadores:
+        game_id = link.gameid_importado
+        
+        if not game_id:
+            game_id = session.exec(select(GameID)
+                                   .where((GameID.tcg == Torneio.tcg) &
+                                          (GameID.jogador_id == link.jogador_id))).first()
+            
         torneio_dict["jogadores"].append(
             {
+                "id": link.id,
                 "jogador_id": link.jogador_id,
-                "nome": link.jogador.nome,
+                "game_id": game_id,
+                "apelido": link.apelido,
                 "tipo_jogador_id": link.tipo_jogador_id,
                 "pontuacao": link.pontuacao,
                 "pontuacao_com_regras": link.pontuacao_com_regras
@@ -47,6 +56,7 @@ def editar_torneio_regras(session: SessionDep, torneio: Torneio, regra_basica: i
         else:
             jogador.tipo_jogador_id = regra_basica
         session.add(jogador)
+        
     return torneio
 
 

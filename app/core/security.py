@@ -53,7 +53,6 @@ class TokenData(BaseModel):
     email: str | None = None
     usuario_id: int | None = None
     endereco: str | None = None
-    pokemon_id: str | None = None
 
 
 def verificar_senha(plain_password, hashed_password):

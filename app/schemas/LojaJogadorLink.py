@@ -1,10 +1,10 @@
 from sqlmodel import SQLModel
-from app.models import Credito
-
+from app.models import LojaJogadorLink
+from app.schemas.GameID import GameIDPublico
 
 class CreditoCreate(SQLModel):
-    jogador_id: int
-    quantidade: float
+    apelido: str
+    game_id: GameIDPublico
 
 
 class CreditoUpdate(SQLModel):
@@ -19,6 +19,6 @@ class CreditoRemove(SQLModel):
     retirar_creditos: float
 
 
-class CreditoJogador(Credito):
+class CreditoJogador(LojaJogadorLink):
     nome_loja: str
     endereco: str

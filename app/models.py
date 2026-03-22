@@ -1,16 +1,17 @@
-from sqlmodel import Field, SQLModel, Relationship, Enum, Column, DateTime, Boolean
+from sqlmodel import Field, SQLModel, Relationship, Enum, Column, DateTime, UniqueConstraint
 from typing import List, Optional
 import uuid
 from datetime import datetime
 from app.core.db import SessionDep
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.Enums import StatusTorneio, CategoriaItem
+from app.utils.Enums import StatusTorneio, CategoriaItem, TCG, TipoTorneio
 from email_validator import validate_email, EmailNotValidError
 from app.core.exception import TopDeckedException
 from sqlmodel import select
 from sqlalchemy import JSON, func
 from passlib.context import CryptContext
 from datetime import date, time
+
 
 PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # ---------------------------------- Usuario ----------------------------------
@@ -48,6 +49,7 @@ class Usuario(UsuarioBase, table=True):
         except EmailNotValidError:
             raise TopDeckedException.bad_request(f"e-mail inválido: '{email}'")
 
+
 # ---------------------------------- Jogador ----------------------------------
 
 
@@ -63,36 +65,54 @@ class Jogador(JogadorBase, table=True):
     usuario_id: int = Field(foreign_key="usuario.id",
                             nullable=True, ondelete="SET NULL")
     usuario: Usuario = Relationship(sa_relationship_kwargs={"lazy": "joined"})
-    pokemon_id: str | None = Field(default=None, nullable=True, unique=True)
+    tcgs: List["GameID"] = Relationship(
+        back_populates="jogador")
     torneios: List["JogadorTorneioLink"] = Relationship(
         back_populates="jogador")
 
 
+# ---------------------------------- GameIDs ----------------------------------
+
+
+class GameID(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("jogador_id", "tcg",
+                         name="jogador_tcg_unique"),
+    )
+    id: Optional[str] = Field(default=None, primary_key=True)
+    tcg: TCG = Field(nullable=False, default=TCG.POKEMON, primary_key=True)
+    jogador_id: Optional[int] = Field(foreign_key="jogador.id", nullable=False)
+    apelido: Optional[str] = Field(default=None)
+    jogador: Optional["Jogador"] | None = Relationship(back_populates="tcgs")
+
+
 # ---------------------------------- JogadorTorneioLink ----------------------------------
 class JogadorTorneioLinkBase(SQLModel):
-    jogador_id: str | None = Field(
-        default=None, foreign_key="jogador.pokemon_id", primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    jogador_id: int | None = Field(
+        default=None, foreign_key="jogador.id")
     tipo_jogador_id: int | None = Field(
         default=None, foreign_key="tipojogador.id")
     pontuacao: float = Field(default=0)
     pontuacao_com_regras: float = Field(default=0)
-    deck: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+    apelido: Optional[str] = Field(default=None)
 
 
 class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):
     torneio_id: str | None = Field(
-        default=None, foreign_key="torneio.id", primary_key=True, ondelete="CASCADE")
+        default=None, foreign_key="torneio.id", ondelete="CASCADE")
     torneio: Optional["Torneio"] | None = Relationship(
         back_populates="jogadores")
     tipo_jogador: Optional["TipoJogador"] | None = Relationship()
     jogador: Optional["Jogador"] | None = Relationship(
         back_populates="torneios")
+    gameid_importado: Optional[str] = Field(default=None)
 
 
 # ---------------------------------- Loja ----------------------------------
 class LojaBase(SQLModel):
     nome: str = Field(index=True)
-    endereco: str = Field(default=None, index=True)
+    endereco: Optional[str] = Field(default=None, nullable=True)
     telefone: Optional[str] = Field(default=None, nullable=True)
     site: Optional[str] = Field(default=None, nullable=True)
     banner: Optional[str] = Field(default=None, unique=True)
@@ -108,11 +128,11 @@ class Loja(LojaBase, table=True):
 # ---------------------------------- Rodada ----------------------------------
 class RodadaBase(SQLModel):
     jogador1_id: Optional[str] = Field(
-        default=None, foreign_key="jogador.pokemon_id", nullable=True)
+        default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     jogador2_id: Optional[str] = Field(
-        default=None, foreign_key="jogador.pokemon_id", nullable=True)
+        default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     vencedor: Optional[str] = Field(
-        default=None, foreign_key="jogador.pokemon_id", nullable=True)
+        default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     num_rodada: int = Field(default=None)
     mesa: Optional[int] = Field(default=None)
     data_de_inicio: date = Field(sa_column=Column(
@@ -157,7 +177,9 @@ class TorneioBase(SQLModel):
     vagas: int = Field(default=0)
     hora: Optional[time] = Field(default=None, nullable=True)
     formato: Optional[str] = Field(default="Desconhecido", nullable=True)
-    tipo: Optional[str] = Field(default="Desconhecido", nullable=True)
+    tcg: Optional[TCG] = Field(default=TCG.POKEMON, nullable=False)
+    tipo: Optional[TipoTorneio] = Field(
+        default=TipoTorneio.IMPORTADO, nullable=False)
     taxa: float = Field(default=0)
     premio: Optional[str] = Field(default=None, nullable=True)
     n_rodadas: int = Field(default=0)
@@ -197,15 +219,19 @@ class Estoque(SQLModel, table=True):
     min_quantidade: int = Field(default=0)
 
 
-# ---------------------------------- Créditos ----------------------------------
+# ---------------------------------- JogadorLojaLink ----------------------------------
 
 
-class Credito(SQLModel, table=True):
-    jogador_id: int | None = Field(
-        default=None, foreign_key="jogador.id", primary_key=True)
+class LojaJogadorLink(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    jogador_id: Optional[int] = Field(
+        default=None, foreign_key="jogador.id")
     loja_id: int | None = Field(
-        default=None, foreign_key="loja.id", primary_key=True)
-    quantidade: float = Field(default=0)
+        default=None, foreign_key="loja.id")
+    creditos: float = Field(default=0)
+    apelido: Optional[str] = Field(default=None)
+    game_id: Optional[str] = Field(default=None)
+    tcg: Optional[TCG] = Field(default=None)
 
 
 # ---------------------------------- Transações ----------------------------------

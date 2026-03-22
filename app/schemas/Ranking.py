@@ -2,6 +2,7 @@ from pydantic import BaseModel
 
 class Ranking(BaseModel):
     jogador_id: str | None
+    game_id: str | None
     nome_jogador: str
     pontos: float
     torneios: int

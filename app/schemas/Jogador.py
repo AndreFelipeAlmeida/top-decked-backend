@@ -6,38 +6,38 @@ from app.utils.Enums import MesEnum
 from app.schemas.Torneio import TorneioJogadorPublico
 from datetime import date
 from app.schemas.Usuario import UsuarioPublico
-
+from app.schemas.GameID import GameIDPublico
 
 class JogadorPublico(JogadorBase):
     id: int
     usuario: UsuarioPublico | None
-    pokemon_id: str | None
+    tcgs: List[GameIDPublico] | None
     telefone: str | None
     data_nascimento: date | None
 
 
 class LojaCriarJogador(BaseModel):
     nome: str
-    pokemon_id: str
+    game_id: GameIDPublico
 
 
 class JogadorLojaPublico(BaseModel):
     id: int
     nome: str
-    pokemon_id: str | None
+    game_id: GameIDPublico
     creditos: float
 
 
 class JogadorPublicoLoja(JogadorBase):
     id: int
-    pokemon_id: str | None
+    tcgs: List[GameIDPublico] | None
     tipo_jogador_id: int | None
 
 
 class JogadorUpdate(JogadorBase):
     nome: str | None = None
     senha: str | None = None
-    pokemon_id: str | None = None
+    tcgs: List[GameIDPublico] | None
     telefone: str | None = None
     email: str | None = None
     data_nascimento: date | None = None

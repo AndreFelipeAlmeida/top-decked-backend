@@ -1,6 +1,10 @@
 from enum import Enum
 
 
+class TCG(str, Enum):
+    POKEMON = "POKEMON"
+    
+    
 class MesEnum(str, Enum):
     Janeiro = "Jan"
     Fevereiro = "Fev"
@@ -43,3 +47,8 @@ class StatusTorneio(str, Enum):
 class CategoriaItem(str, Enum):
     CANTINA = "CANTINA"
     GERAIS = "GERAIS"
+
+
+class TipoTorneio(str, Enum):
+    IMPORTADO = "IMPORTADO"
+    CRIADO = "CRIADO"

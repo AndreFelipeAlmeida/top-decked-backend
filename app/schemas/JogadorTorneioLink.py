@@ -3,4 +3,4 @@ from app.models import JogadorTorneioLinkBase
 
 
 class JogadorTorneioLinkPublico(JogadorTorneioLinkBase):
-    nome: Optional[str]
+    game_id: Optional[str]

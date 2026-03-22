@@ -4,7 +4,8 @@ import xml.etree.ElementTree as ET
 from app.core.exception import TopDeckedException
 from app.core.db import SessionDep
 from app.utils.datetimeUtil import parse_data, parse_datetime
-from app.models import Rodada, Torneio, Jogador, JogadorTorneioLink, StatusTorneio
+from app.models import Rodada, Torneio, Jogador, JogadorTorneioLink, StatusTorneio, GameID, LojaJogadorLink
+from app.utils.Enums import TipoTorneio, TCG
 
 
 def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
@@ -15,20 +16,18 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
         raise TopDeckedException.bad_request("Arquivo XML inválido")
 
     torneio = _importar_metadados(xml, loja_id)
-    
+
     if session.get(Torneio, torneio.id):
-        raise TopDeckedException.bad_request(f"Torneio já criado anteriormente")
-    
+        raise TopDeckedException.bad_request(
+            f"Torneio já criado anteriormente")
+
     session.add(torneio)
     session.commit()
     session.refresh(torneio)
 
-    jogadores = _importar_jogadores(xml, session)
+    jogadores_dict = _criar_relacao_jogador_torneio(xml, torneio, session)
 
-    for jogador in jogadores:
-        _criar_relacao_jogador_torneio(jogador.pokemon_id, torneio.id, session)
-
-    _importar_rodadas(xml, torneio.id, session)
+    _importar_rodadas(xml, jogadores_dict, torneio.id, session)
 
     return torneio
 
@@ -59,56 +58,64 @@ def _importar_metadados(xml: ET.Element, loja_id: int):
                            tempo_por_rodada=tempo_por_rodada,
                            data_inicio=data_inicio,
                            loja_id=loja_id,
-                           status=StatusTorneio.FINALIZADO)
+                           status=StatusTorneio.FINALIZADO,
+                           tipo=TipoTorneio.IMPORTADO)
     if id.strip() != "":
         novo_torneio.id = id
     return novo_torneio
 
 
-def _importar_jogadores(xml: ET.Element, session: SessionDep):
-    jogadores = []
+def _criar_relacao_jogador_torneio(xml: ET.Element, torneio: Torneio, session: SessionDep):
+    jogadores_dict = {}
 
     dados = xml.find("players")
 
     if dados is None:
-        return jogadores
+        return jogadores_dict
 
     for jogador in dados.findall("player"):
-        pokemon_id = jogador.attrib.get("userid")
+        gameid_importado = jogador.attrib.get("userid")
         primeiro_nome = jogador.findtext("firstname", "").strip()
         ultimo_nome = jogador.findtext("lastname", "").strip()
         nome = f"{primeiro_nome} {ultimo_nome}".strip()
+        jogador_id = None
 
         jogador_existente = session.exec(
-            select(Jogador).where(Jogador.pokemon_id == pokemon_id)
+            select(Jogador)
+            .join(GameID, Jogador.id == GameID.jogador_id)
+            .where(GameID.id == gameid_importado and GameID.tcg == TCG.POKEMON)
         ).first()
 
         if jogador_existente:
-            jogadores.append(jogador_existente)
-        else:
-            novo_jogador = Jogador(nome=nome, pokemon_id=pokemon_id)
+            jogador_id = jogador_existente.id
+            link_loja = session.exec(select(LojaJogadorLink)
+                                    .where((LojaJogadorLink.loja_id == torneio.loja_id) &
+                                            (LojaJogadorLink.jogador_id == jogador_existente.id))).first()
+            if not link_loja:
+                novo_link_loja = LojaJogadorLink(jogador_id=jogador_existente.id,
+                                                 game_id=gameid_importado,
+                                                 tcg=TCG.POKEMON,
+                                                 apelido=nome,
+                                                 loja_id=torneio.loja_id, quantidade=0)
+                session.add(novo_link_loja)
+            
+        participacao = JogadorTorneioLink(
+            jogador_id=jogador_id,
+            torneio_id=torneio.id,
+            gameid_importado=gameid_importado,
+            apelido=nome,
+        )
 
-            session.add(novo_jogador)
-            session.commit()
-            session.refresh(novo_jogador)
+        session.add(participacao)
+        session.commit()
+        session.refresh(participacao)
 
-            jogadores.append(novo_jogador)
+        jogadores_dict[gameid_importado] = participacao.id
 
-    return jogadores
-
-
-def _criar_relacao_jogador_torneio(jogador_id: int, torneio_id: str, session: SessionDep):
-    participacao = JogadorTorneioLink(
-        jogador_id=jogador_id,
-        torneio_id=torneio_id
-    )
-
-    session.add(participacao)
-    session.commit()
-    session.refresh(participacao)
+    return jogadores_dict
 
 
-def _importar_rodadas(xml: ET.Element, torneio_id: str, session: SessionDep):
+def _importar_rodadas(xml: ET.Element, jogadores_dict: dict, torneio_id: str, session: SessionDep):
     pods = xml.find("pods").findall("pod")
     rodadas = []
     for pod in pods:
@@ -118,15 +125,15 @@ def _importar_rodadas(xml: ET.Element, torneio_id: str, session: SessionDep):
         num_rodada = int(rodada.get("number"))
         partidas = rodada.find("matches")
 
-        _importar_partidas(partidas, torneio_id, num_rodada, session)
+        _importar_partidas(partidas, jogadores_dict, torneio_id, num_rodada, session)
 
 
-def _importar_partidas(partidas: ET.Element, torneio_id: str, num_rodada: int, session: SessionDep):
+def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: str, num_rodada: int, session: SessionDep):
     partidas_criadas = []
     for partida in partidas.findall("match"):
         jogador1_id = None
         jogador2_id = None
-        
+
         jogador = partida.find("player")
         if jogador is not None:
             jogador1_id = jogador.get("userid")
@@ -147,9 +154,9 @@ def _importar_partidas(partidas: ET.Element, torneio_id: str, num_rodada: int, s
         data_inicio = parse_datetime(timestamp_str)
 
         partida = Rodada(
-            jogador1_id=jogador1_id,
-            jogador2_id=jogador2_id,
-            vencedor=vencedor,
+            jogador1_id=jogadores_dict[jogador1_id],
+            jogador2_id=jogadores_dict[jogador2_id],
+            vencedor=jogadores_dict[vencedor],
             torneio_id=torneio_id,
             num_rodada=num_rodada,
             mesa=mesa,
