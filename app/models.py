@@ -3,8 +3,8 @@ from typing import List, Optional
 import uuid
 from datetime import datetime
 from app.core.db import SessionDep
-from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.Enums import StatusTorneio, CategoriaItem, TCG, TipoTorneio
+from app.utils.datetimeUtil import data_agora_brasil, agora_brasil
+from app.utils.Enums import StatusTorneio, CategoriaItem, TCG, TipoTorneio, TipoMovimentacaoCredito, TipoMovimentacaoEstoque
 from email_validator import validate_email, EmailNotValidError
 from app.core.exception import TopDeckedException
 from sqlmodel import select
@@ -207,7 +207,7 @@ class Torneio(TorneioBase, table=True):
 # ---------------------------------- Estoque ----------------------------------
 
 
-class Estoque(SQLModel, table=True):
+class EstoqueBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
@@ -215,10 +215,37 @@ class Estoque(SQLModel, table=True):
     categoria: CategoriaItem = Field(sa_column=Column(
         Enum(CategoriaItem)), default=CategoriaItem.GERAIS)
     preco: float = Field(default=0)
-    quantidade: int = Field(default=0)
     min_quantidade: int = Field(default=0)
+    
+class Estoque(EstoqueBase, table=True):
+    quantidade: int = Field(default=0)
 
 
+# ---------------------------------- Histórico do Estoque ----------------------------------
+
+
+class HistoricoEstoque(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    estoque_id: Optional[int] = Field(foreign_key="estoque.id")
+    loja_id: int = Field(foreign_key="loja.id")
+
+    # movimentação
+    quantidade: Optional[int] = Field(default=None)
+    tipo: TipoMovimentacaoEstoque
+
+    # log de alteração
+    campo_alterado: Optional[str] = None
+    valor_antigo: Optional[str] = None
+    valor_novo: Optional[str] = None
+
+    transacao_id: Optional[int] = Field(
+        default=None, foreign_key="transacao.id")
+
+    descricao: Optional[str] = None
+    criado_em: datetime = Field(default_factory=agora_brasil)
+    
+    
 # ---------------------------------- JogadorLojaLink ----------------------------------
 
 
@@ -234,6 +261,21 @@ class LojaJogadorLink(SQLModel, table=True):
     tcg: Optional[TCG] = Field(default=None)
 
 
+# ---------------------------------- Histórico de Crédito ----------------------------------
+
+
+class HistoricoCredito(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    jogador_id: int = Field(foreign_key="jogador.id")
+    loja_id: int = Field(foreign_key="loja.id")
+    valor: float
+    tipo: TipoMovimentacaoCredito
+    descricao: Optional[str] = None
+    transacao_id: Optional[int] = Field(
+        default=None, foreign_key="transacao.id")
+    criado_em: datetime = Field(default_factory=agora_brasil())
+    
+    
 # ---------------------------------- Transações ----------------------------------
 
 
@@ -243,14 +285,20 @@ class Transacao(SQLModel, table=True):
         default=None, foreign_key="jogador.id")
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
+    itens: List["ItemTransacao"] = Relationship(back_populates="transacao")
+    
+    
+# ---------------------------------- Item Transação ----------------------------------
 
 
-# ---------------------------------- Carrinho ----------------------------------
-
-
-class Carrinho(SQLModel, table=True):
-    transacao: int | None = Field(
-        default=None, foreign_key="transacao.id", primary_key=True)
-    estoque_id: int | None = Field(
-        default=None, foreign_key="estoque.id", primary_key=True)
-    quantidade: int = Field(default=1)
+class ItemTransacao(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transacao_id: int = Field(
+        default=None, foreign_key="transacao.id")
+    transacao: Optional["Transacao"] | None = Relationship(
+        back_populates="itens")
+    item_id: Optional[int] = Field(
+        default=None, foreign_key="estoque.id")
+    quantidade: int = Field(default=0)
+    nome_item: str = Field(default="")
+    preco_unitario: float = Field(default=0)

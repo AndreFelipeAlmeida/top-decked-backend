@@ -52,3 +52,20 @@ class CategoriaItem(str, Enum):
 class TipoTorneio(str, Enum):
     IMPORTADO = "IMPORTADO"
     CRIADO = "CRIADO"
+
+
+class TipoMovimentacaoCredito(str, Enum):
+    ADICAO = "adicao"
+    REMOCAO = "remocao"
+    COMPRA = "compra"
+    VENDA = "venda"
+
+
+class TipoMovimentacaoEstoque(str, Enum):
+    ENTRADA = "entrada"
+    SAIDA = "saida"
+    VENDA = "venda"
+    REPOSICAO = "reposicao"
+    ALTERACAO = "alteracao"
+    CADASTRO = "cadastro"
+    REMOCAO = "remocao"
