@@ -268,7 +268,8 @@ class HistoricoCredito(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: int = Field(foreign_key="jogador.id")
     loja_id: int = Field(foreign_key="loja.id")
-    valor: float
+    valor_antigo: Optional[float] = Field(default=None)
+    valor_novo: Optional[float] = Field(default=None)
     tipo: TipoMovimentacaoCredito
     descricao: Optional[str] = None
     transacao_id: Optional[int] = Field(

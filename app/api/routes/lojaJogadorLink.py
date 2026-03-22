@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
-from app.models import LojaJogadorLink, Loja, GameID, Jogador
+from app.models import LojaJogadorLink, Loja, GameID, Jogador, HistoricoCredito
+from app.utils.Enums import TipoMovimentacaoCredito
 from typing import List, Annotated
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
-from app.schemas.LojaJogadorLink import CreditoCreate, CreditoUpdate, CreditoAdd, CreditoJogador, CreditoRemove
+from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove
 
 router = APIRouter(
     prefix="/creditos",
@@ -15,12 +16,19 @@ router = APIRouter(
 
 
 @router.post("/", response_model=LojaJogadorLink)
-def create_credito(credito_create: CreditoCreate, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    jogador = session.exec(select(Jogador)
-                 .join(GameID, GameID.jogador_id == Jogador.id)
-                 .where((GameID.tcg == credito_create.game_id.tcg) &
-                        (GameID.jogador_id == credito_create.game_id.id))).first()
-                 
+def create_credito(
+    credito_create: CreditoCreate,
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)]
+):
+    jogador = session.exec(
+        select(Jogador)
+        .join(GameID, GameID.jogador_id == Jogador.id)
+        .where(
+            (GameID.tcg == credito_create.game_id.tcg) &
+            (GameID.jogador_id == credito_create.game_id.id)
+        )
+    ).first()
 
     query = select(LojaJogadorLink).where(
         LojaJogadorLink.loja_id == loja.id
@@ -36,19 +44,34 @@ def create_credito(credito_create: CreditoCreate, session: SessionDep, loja: Ann
         )
 
     credito_existente = session.exec(query).first()
-    
+
     if credito_existente:
         raise TopDeckedException.bad_request("Jogador já cadastrado")
-    
-    credito = LojaJogadorLink(jogador_id=jogador.id if jogador else None,
-                            game_id=credito_create.game_id.id,
-                            tcg=credito_create.game_id.tcg,
-                            apelido=credito_create.apelido,
-                            loja_id=loja.id, quantidade=0)
-    
+
+
+    credito = LojaJogadorLink(
+        jogador_id=jogador.id if jogador else None,
+        game_id=credito_create.game_id.id,
+        tcg=credito_create.game_id.tcg,
+        apelido=credito_create.apelido,
+        loja_id=loja.id,
+        creditos=0
+    )
+
     session.add(credito)
+    session.flush()
+
+    historico = HistoricoCredito(
+        jogador_id=credito.jogador_id,
+        loja_id=loja.id,
+        tipo=TipoMovimentacaoCredito.ADICAO,
+        descricao="Ligação entre jogador e loja cadastrada"
+    )
+    session.add(historico)
+
     session.commit()
     session.refresh(credito)
+
     return credito
 
 
@@ -77,49 +100,97 @@ def get_creditos_by_loja(session: SessionDep, loja: Annotated[TokenData, Depends
 
 
 @router.patch("/{jogador_id}/adicionar-credito", response_model=LojaJogadorLink)
-def add_credito(jogador_id: int, data: CreditoAdd, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    credito = session.get(LojaJogadorLink, (jogador_id, loja.id))
-    if not credito:
-        credito = LojaJogadorLink(jogador_id=jogador_id,
-                                  loja_id=loja.id)
+def add_credito(
+    jogador_id: int,
+    data: CreditoAdd,
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)]
+):
+    if data.novos_creditos <= 0:
+        raise HTTPException(
+            status_code=400, detail="Valor deve ser maior que zero.")
+    
+    credito = session.exec(
+        select(LojaJogadorLink).where(
+            LojaJogadorLink.jogador_id == jogador_id,
+            LojaJogadorLink.loja_id == loja.id
+        )
+    ).first()
 
-    credito.quantidade += data.novos_creditos
+    if not credito:
+        credito = LojaJogadorLink(
+            jogador_id=jogador_id,
+            loja_id=loja.id,
+            creditos=0
+        )
+        session.add(credito)
+        session.flush()
+
+    valor_antigo = credito.creditos
+    valor_novo = valor_antigo + data.novos_creditos
+
+    credito.creditos = valor_novo
+
+    historico = HistoricoCredito(
+        jogador_id=jogador_id,
+        loja_id=loja.id,
+        valor_antigo=valor_antigo,
+        valor_novo=valor_novo,
+        tipo=TipoMovimentacaoCredito.ADICAO,
+        descricao=f"Adicionado {data.novos_creditos} créditos"
+    )
+
+    session.add(historico)
     session.add(credito)
+
     session.commit()
     session.refresh(credito)
+
     return credito
 
 
 @router.patch("/{jogador_id}/remover-credito", response_model=LojaJogadorLink)
-def remover_credito(jogador_id: int, data: CreditoRemove, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    credito = session.get(LojaJogadorLink, (jogador_id, loja.id))
-    if credito:
-        credito.quantidade = max(0, credito.quantidade - data.retirar_creditos)
-        session.add(credito)
-        session.commit()
-        session.refresh(credito)
+def remover_credito(
+    jogador_id: int,
+    data: CreditoRemove,
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)]
+):
+    if data.retirar_creditos <= 0:
+        raise HTTPException(
+            status_code=400, detail="Valor deve ser maior que zero.")
+    
+    credito = session.exec(
+        select(LojaJogadorLink).where(
+            LojaJogadorLink.jogador_id == jogador_id,
+            LojaJogadorLink.loja_id == loja.id
+        )
+    ).first()
 
-    return credito
-
-
-@router.put("/{jogador_id}", response_model=LojaJogadorLink)
-def update_credito(jogador_id: int, credito_update: CreditoUpdate, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    credito = session.get(LojaJogadorLink, (jogador_id, loja.id))
     if not credito:
-        raise HTTPException(status_code=404, detail="Crédito não encontrado")
-    credito.quantidade = credito_update.quantidade
+        raise HTTPException(status_code=404, detail="Crédito não encontrado.")
+
+    valor_antigo = credito.creditos
+
+    if valor_antigo < data.retirar_creditos:
+        raise HTTPException(status_code=400, detail="Saldo insuficiente.")
+
+    valor_novo = valor_antigo - data.retirar_creditos
+    credito.creditos = valor_novo
+
+    historico = HistoricoCredito(
+        jogador_id=jogador_id,
+        loja_id=loja.id,
+        valor_antigo=valor_antigo,
+        valor_novo=valor_novo,
+        tipo=TipoMovimentacaoCredito.REMOCAO,
+        descricao=f"Removido {data.retirar_creditos} créditos"
+    )
+
+    session.add(historico)
     session.add(credito)
+
     session.commit()
     session.refresh(credito)
+
     return credito
-
-
-@router.delete("/{jogador_id}", status_code=204)
-def delete_credito(credito_id: int, session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    credito = session.get(LojaJogadorLink, credito_id)
-    
-    if not credito:
-        raise HTTPException(status_code=404, detail="Crédito não encontrado")
-    session.delete(credito)
-    session.commit()
-    return None
