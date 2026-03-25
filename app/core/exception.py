@@ -16,7 +16,7 @@ class TopDeckedException:
             headers={"WWW-Authenticate": "Bearer"})
 
     @staticmethod
-    def unauthorized(message: str):
+    def unauthorized(message: str = None):
         return HTTPException(
             status_code=401,
             detail=message if message else "Permissão negada",
