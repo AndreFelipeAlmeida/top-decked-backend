@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from sqlalchemy import func, or_
+from sqlalchemy.orm import selectinload
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query
 from sqlmodel import select
-from app.schemas.Jogador import JogadorPublico, JogadorUpdate, JogadorCriar, JogadorLojaPublico
+from app.schemas.Jogador import JogadorPublico, JogadorUpdate, JogadorCriar, JogadorLojaPublico, PaginatedJogadores
 from app.core.db import SessionDep
 from typing import Annotated, List
 from app.core.security import TokenData
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
 from app.core.config import settings
-from app.models import Usuario, Jogador, JogadorTorneioLink, Torneio, LojaJogadorLink
+from app.models import Usuario, Jogador, JogadorTorneioLink, Torneio, LojaJogadorLink, GameID
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.JogadorUtil import vincular_historico_e_creditos, calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas
 from app.utils.datetimeUtil import data_agora_brasil
@@ -110,10 +112,42 @@ def retornar_jogador(jogador_id: int, session: SessionDep):
     return jogador
 
 
-@router.get("/", response_model=list[JogadorPublico])
-def get_jogadores(session: SessionDep):
-    return session.exec(select(Jogador)).all()
+@router.get("/", response_model=PaginatedJogadores)
+def get_jogadores(
+    session: SessionDep,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    search: str | None = None,
+):
+    offset = (page - 1) * limit
 
+    query = select(Jogador).options(selectinload(Jogador.tcgs))
+
+    if search:
+        query = query.where(
+            or_(
+                Jogador.nome.ilike(f"%{search}%"),
+                Jogador.tcgs.any(GameID.id.ilike(f"%{search}%"))
+            )
+        )
+
+    jogadores = session.exec(
+        query.offset(offset).limit(limit)
+    ).all()
+
+    total = session.exec(
+        select(func.count()).select_from(query.subquery())
+    ).one()
+
+    total_pages = (total + limit - 1) // limit
+
+    return {
+        "data": jogadores,
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "totalPages": total_pages,
+    }
 
 @router.put("/", response_model=JogadorPublico)
 def update_jogador(novo: JogadorUpdate,

@@ -8,16 +8,25 @@ from datetime import date
 from app.schemas.Usuario import UsuarioPublico
 from app.schemas.GameID import GameIDPublico
 
+    
 class JogadorPublico(JogadorBase):
     id: int
     usuario: UsuarioPublico | None
-    tcgs: List[GameIDPublico] | None
+    tcgs: List[GameIDPublico] = []
     telefone: str | None
     data_nascimento: date | None
 
 
+class PaginatedJogadores(BaseModel):
+    data: list[JogadorPublico]
+    page: int
+    limit: int
+    total: int
+    totalPages: int
+    
+    
 class LojaCriarJogador(BaseModel):
-    nome: str
+    apelido: str
     game_id: GameIDPublico
 
 
