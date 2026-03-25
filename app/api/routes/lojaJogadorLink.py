@@ -7,12 +7,48 @@ from app.utils.Enums import TipoMovimentacaoCredito
 from typing import List, Annotated
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
-from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove
+from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove, CreditoCreateById
 
 router = APIRouter(
     prefix="/creditos",
     tags=["Creditos"]
 )
+
+
+@router.post("/{jogador_id}", response_model=LojaJogadorLink)
+def create_credito_by_id(
+    jogador_id: int,
+    apelido: str,
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)]
+):
+    jogador = session.get(Jogador, jogador_id)
+
+    if not jogador:
+        raise TopDeckedException.not_found("Jogador não encontrado")
+
+    credito = session.exec(select(LojaJogadorLink).where((LojaJogadorLink.loja_id == loja.id) &
+                                                         (LojaJogadorLink.jogador_id == jogador_id))).first()
+
+    if credito:
+        raise TopDeckedException.bad_request("Vínculo já existent")
+
+    novo_credito = LojaJogadorLink(
+        jogador_id=jogador_id, loja_id=loja.id, apelido=apelido, creditos=0)
+
+    historico = HistoricoCredito(
+        jogador_id=credito.jogador_id,
+        loja_id=loja.id,
+        tipo=TipoMovimentacaoCredito.ADICAO,
+        descricao="Ligação entre jogador e loja cadastrada"
+    )
+
+    session.add(historico)
+    session.add(novo_credito)
+    session.commit()
+    session.refresh(novo_credito)
+
+    return novo_credito
 
 
 @router.post("/", response_model=LojaJogadorLink)
@@ -47,7 +83,6 @@ def create_credito(
 
     if credito_existente:
         raise TopDeckedException.bad_request("Jogador já cadastrado")
-
 
     credito = LojaJogadorLink(
         jogador_id=jogador.id if jogador else None,
@@ -109,7 +144,7 @@ def add_credito(
     if data.novos_creditos <= 0:
         raise HTTPException(
             status_code=400, detail="Valor deve ser maior que zero.")
-    
+
     credito = session.exec(
         select(LojaJogadorLink).where(
             LojaJogadorLink.jogador_id == jogador_id,
@@ -159,7 +194,7 @@ def remover_credito(
     if data.retirar_creditos <= 0:
         raise HTTPException(
             status_code=400, detail="Valor deve ser maior que zero.")
-    
+
     credito = session.exec(
         select(LojaJogadorLink).where(
             LojaJogadorLink.jogador_id == jogador_id,
