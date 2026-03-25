@@ -3,6 +3,16 @@ from enum import Enum
 
 class TCG(str, Enum):
     POKEMON = "POKEMON"
+    YUGIOH = "YUGIOH"
+    MAGIC = "MAGIC"
+
+    @property
+    def label(self):
+        return {
+            "POKEMON": "Pokémon",
+            "YUGIOH": "Yu-Gi-Oh!",
+            "MAGIC": "Magic: The Gathering",
+        }[self.value]
     
     
 class MesEnum(str, Enum):
