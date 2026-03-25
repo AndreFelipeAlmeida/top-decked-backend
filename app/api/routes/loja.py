@@ -6,11 +6,12 @@ from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
 from app.schemas.Jogador import LojaCriarJogador
-from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario
+from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario, HistoricoCredito
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
 from app.utils.datetimeUtil import data_agora_brasil
+from app.utils.Enums import TipoMovimentacaoCredito
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
 from datetime import datetime
@@ -177,7 +178,7 @@ def update_banner(session: SessionDep,
     return loja
 
 
-@router.post("/criar-jogador", response_model=LojaCriarJogador)
+@router.post("/criar-jogador", response_model=LojaJogadorLink)
 def loja_criar_jogador(novo_jogador: LojaCriarJogador,
                        token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
                        session: SessionDep):
@@ -187,8 +188,14 @@ def loja_criar_jogador(novo_jogador: LojaCriarJogador,
                                   & (GameID.tcg == novo_jogador.game_id.tcg))).first()
 
     novo_link = LojaJogadorLink(loja_id=token_data.id, 
-                                apelido=novo_jogador.nome, 
+                                apelido=novo_jogador.apelido, 
                                 quantidade=0)
+    
+    historico = HistoricoCredito(
+        loja_id=token_data.id,
+        tipo=TipoMovimentacaoCredito.ADICAO,
+        descricao="Ligação entre jogador e loja cadastrada"
+    )
     
     if jogador:
         link = session.exec(select(LojaJogadorLink)
@@ -198,7 +205,9 @@ def loja_criar_jogador(novo_jogador: LojaCriarJogador,
             raise TopDeckedException.bad_request("Jogador já cadastrado na sua loja!")
         
         novo_link.jogador_id = jogador.id 
+        historico.jogador_id = jogador.id
         
+    session.add(historico)
     session.add(novo_link)
     session.commit()
     session.refresh(novo_link)
