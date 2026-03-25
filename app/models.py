@@ -69,7 +69,8 @@ class Jogador(JogadorBase, table=True):
         back_populates="jogador")
     torneios: List["JogadorTorneioLink"] = Relationship(
         back_populates="jogador")
-
+    lojas: List["LojaJogadorLink"] = Relationship(
+        back_populates="jogador")
 
 # ---------------------------------- GameIDs ----------------------------------
 
@@ -249,14 +250,7 @@ class HistoricoEstoque(SQLModel, table=True):
 # ---------------------------------- JogadorLojaLink ----------------------------------
 
 
-class LojaJogadorLink(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("loja_id", "game_id",
-                         name="loja_id_game_id_unique"),
-        
-        UniqueConstraint("loja_id", "jogador_id",
-                         name="loja_id_jogador_id_unique")
-    )
+class LojaJogadorLinkBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: Optional[int] = Field(
         default=None, foreign_key="jogador.id")
@@ -266,6 +260,17 @@ class LojaJogadorLink(SQLModel, table=True):
     apelido: Optional[str] = Field(default=None)
     game_id: Optional[str] = Field(default=None)
     tcg: Optional[TCG] = Field(default=None)
+
+
+class LojaJogadorLink(LojaJogadorLinkBase, table=True):
+    __table_args__ = (
+        UniqueConstraint("loja_id", "game_id",
+                         name="loja_id_game_id_unique"),
+
+        UniqueConstraint("loja_id", "jogador_id",
+                         name="loja_id_jogador_id_unique")
+    )
+    jogador: Optional["Jogador"] = Relationship(back_populates="lojas")
 
 
 # ---------------------------------- Histórico de Crédito ----------------------------------
@@ -303,7 +308,7 @@ class ItemTransacao(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     transacao_id: int = Field(
         default=None, foreign_key="transacao.id")
-    transacao: Optional["Transacao"] | None = Relationship(
+    transacao: Optional["Transacao"] = Relationship(
         back_populates="itens")
     item_id: Optional[int] = Field(
         default=None, foreign_key="estoque.id")

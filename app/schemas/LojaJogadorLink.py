@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel
-from app.models import LojaJogadorLink
+from app.models import LojaJogadorLinkBase
 from app.schemas.GameID import GameIDPublico
 
 class CreditoCreate(SQLModel):
@@ -19,6 +19,6 @@ class CreditoRemove(SQLModel):
     retirar_creditos: float
 
 
-class CreditoJogador(LojaJogadorLink):
+class CreditoJogador(LojaJogadorLinkBase):
     nome_loja: str
     endereco: str

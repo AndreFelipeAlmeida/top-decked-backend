@@ -7,7 +7,7 @@ from app.utils.Enums import TipoMovimentacaoCredito
 from typing import List, Annotated
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
-from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove, CreditoCreateById
+from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove
 
 router = APIRouter(
     prefix="/creditos",
@@ -31,15 +31,15 @@ def create_credito_by_id(
                                                          (LojaJogadorLink.jogador_id == jogador_id))).first()
 
     if credito:
-        raise TopDeckedException.bad_request("Vínculo já existent")
+        raise TopDeckedException.bad_request("Vínculo já existente")
 
     novo_credito = LojaJogadorLink(
         jogador_id=jogador_id, loja_id=loja.id, apelido=apelido, creditos=0)
 
     historico = HistoricoCredito(
-        jogador_id=credito.jogador_id,
+        jogador_id=jogador_id,
         loja_id=loja.id,
-        tipo=TipoMovimentacaoCredito.ADICAO,
+        tipo=TipoMovimentacaoCredito.CADASTRO,
         descricao="Ligação entre jogador e loja cadastrada"
     )
 
@@ -99,7 +99,7 @@ def create_credito(
     historico = HistoricoCredito(
         jogador_id=credito.jogador_id,
         loja_id=loja.id,
-        tipo=TipoMovimentacaoCredito.ADICAO,
+        tipo=TipoMovimentacaoCredito.CADASTRO,
         descricao="Ligação entre jogador e loja cadastrada"
     )
     session.add(historico)
@@ -227,5 +227,35 @@ def remover_credito(
 
     session.commit()
     session.refresh(credito)
+
+    return credito
+
+
+@router.delete("/{jogador_id}", response_model=LojaJogadorLink)
+def deletar_credito(
+    jogador_id: int,
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)],
+):
+    credito = session.exec(
+        select(LojaJogadorLink).where(
+            (LojaJogadorLink.jogador_id == jogador_id)
+            & (LojaJogadorLink.loja_id == loja.id)
+        )
+    ).first()
+
+    if not credito:
+        raise TopDeckedException.not_found("Vínculo não encontrado")
+
+    historico = HistoricoCredito(
+        jogador_id=jogador_id,
+        loja_id=loja.id,
+        tipo=TipoMovimentacaoCredito.REMOCAO,
+        descricao="Vínculo entre jogador e loja removido",
+    )
+
+    session.delete(credito)
+    session.add(historico)
+    session.commit()
 
     return credito

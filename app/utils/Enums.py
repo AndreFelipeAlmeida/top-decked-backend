@@ -68,7 +68,7 @@ class TipoMovimentacaoCredito(str, Enum):
     ADICAO = "adicao"
     REMOCAO = "remocao"
     COMPRA = "compra"
-
+    CADASTRO = "cadastro"
 
 class TipoMovimentacaoEstoque(str, Enum):
     ENTRADA = "entrada"

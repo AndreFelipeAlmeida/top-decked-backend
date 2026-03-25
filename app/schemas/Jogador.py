@@ -1,5 +1,5 @@
 from sqlmodel import Field
-from app.models import JogadorBase
+from app.models import JogadorBase, LojaJogadorLink
 from pydantic import BaseModel
 from typing import List
 from app.utils.Enums import MesEnum
@@ -17,8 +17,12 @@ class JogadorPublico(JogadorBase):
     data_nascimento: date | None
 
 
+
+class PaginatedJogadorPublico(JogadorPublico):
+    lojas: List[LojaJogadorLink]
+    
 class PaginatedJogadores(BaseModel):
-    data: list[JogadorPublico]
+    data: list[PaginatedJogadorPublico]
     page: int
     limit: int
     total: int

@@ -193,7 +193,7 @@ def loja_criar_jogador(novo_jogador: LojaCriarJogador,
     
     historico = HistoricoCredito(
         loja_id=token_data.id,
-        tipo=TipoMovimentacaoCredito.ADICAO,
+        tipo=TipoMovimentacaoCredito.CADASTRO,
         descricao="Ligação entre jogador e loja cadastrada"
     )
     
