@@ -250,6 +250,13 @@ class HistoricoEstoque(SQLModel, table=True):
 
 
 class LojaJogadorLink(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("loja_id", "game_id",
+                         name="loja_id_game_id_unique"),
+        
+        UniqueConstraint("loja_id", "jogador_id",
+                         name="loja_id_jogador_id_unique")
+    )
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: Optional[int] = Field(
         default=None, foreign_key="jogador.id")
@@ -266,7 +273,7 @@ class LojaJogadorLink(SQLModel, table=True):
 
 class HistoricoCredito(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    jogador_id: int = Field(foreign_key="jogador.id")
+    jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id", nullable=True)
     loja_id: int = Field(foreign_key="loja.id")
     valor_antigo: Optional[float] = Field(default=None)
     valor_novo: Optional[float] = Field(default=None)
@@ -274,7 +281,7 @@ class HistoricoCredito(SQLModel, table=True):
     descricao: Optional[str] = None
     transacao_id: Optional[int] = Field(
         default=None, foreign_key="transacao.id")
-    criado_em: datetime = Field(default_factory=agora_brasil())
+    criado_em: datetime = Field(default_factory=agora_brasil)
     
     
 # ---------------------------------- Transações ----------------------------------
