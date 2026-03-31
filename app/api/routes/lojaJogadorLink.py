@@ -1,13 +1,15 @@
+from typing import List, Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
+from sqlalchemy import or_
+from sqlalchemy.orm import selectinload
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.models import LojaJogadorLink, Loja, GameID, Jogador, HistoricoCredito
 from app.utils.Enums import TipoMovimentacaoCredito
-from typing import List, Annotated
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
-from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove
+from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove, LojaJogadorPublico
 
 router = APIRouter(
     prefix="/creditos",
@@ -51,7 +53,7 @@ def create_credito_by_id(
     return novo_credito
 
 
-@router.post("/", response_model=LojaJogadorLink)
+@router.post("/", response_model=LojaJogadorPublico)
 def create_credito(
     credito_create: CreditoCreate,
     session: SessionDep,
@@ -127,16 +129,37 @@ def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, D
     return creditos_formatados
 
 
-@router.get("/", response_model=List[LojaJogadorLink])
-def get_creditos_by_loja(session: SessionDep, loja: Annotated[TokenData, Depends(retornar_loja_atual)]):
-    creditos = session.exec(select(LojaJogadorLink).where(
-        LojaJogadorLink.loja_id == loja.id)).all()
+@router.get("/", response_model=List[LojaJogadorPublico])
+def get_creditos_by_loja(
+    session: SessionDep,
+    loja: Annotated[TokenData, Depends(retornar_loja_atual)],
+    search: str | None = None,
+):
+    query = (
+        select(LojaJogadorLink)
+        .options(selectinload(LojaJogadorLink.jogador))
+        .where(LojaJogadorLink.loja_id == loja.id)
+    )
+
+    if search:
+        query = query.where(
+            or_(
+                LojaJogadorLink.game_id.ilike(f"%{search}%"),
+                LojaJogadorLink.apelido.ilike(f"%{search}%"),
+                LojaJogadorLink.jogador.has(
+                    Jogador.nome.ilike(f"%{search}%")
+                ),
+            )
+        )
+
+    creditos = session.exec(query).all()
+
     return creditos
 
 
-@router.patch("/{jogador_id}/adicionar-credito", response_model=LojaJogadorLink)
+@router.patch("/{credito_id}/adicionar-credito", response_model=LojaJogadorLink)
 def add_credito(
-    jogador_id: int,
+    credito_id: int,
     data: CreditoAdd,
     session: SessionDep,
     loja: Annotated[TokenData, Depends(retornar_loja_atual)]
@@ -145,21 +168,10 @@ def add_credito(
         raise HTTPException(
             status_code=400, detail="Valor deve ser maior que zero.")
 
-    credito = session.exec(
-        select(LojaJogadorLink).where(
-            LojaJogadorLink.jogador_id == jogador_id,
-            LojaJogadorLink.loja_id == loja.id
-        )
-    ).first()
+    credito = session.get(LojaJogadorLink, credito_id)
 
     if not credito:
-        credito = LojaJogadorLink(
-            jogador_id=jogador_id,
-            loja_id=loja.id,
-            creditos=0
-        )
-        session.add(credito)
-        session.flush()
+        raise HTTPException(status_code=404, detail="Crédito não encontrado.")
 
     valor_antigo = credito.creditos
     valor_novo = valor_antigo + data.novos_creditos
@@ -167,7 +179,7 @@ def add_credito(
     credito.creditos = valor_novo
 
     historico = HistoricoCredito(
-        jogador_id=jogador_id,
+        jogador_id=credito.jogador_id,
         loja_id=loja.id,
         valor_antigo=valor_antigo,
         valor_novo=valor_novo,
@@ -184,9 +196,9 @@ def add_credito(
     return credito
 
 
-@router.patch("/{jogador_id}/remover-credito", response_model=LojaJogadorLink)
+@router.patch("/{credito_id}/remover-credito", response_model=LojaJogadorLink)
 def remover_credito(
-    jogador_id: int,
+    credito_id: int,
     data: CreditoRemove,
     session: SessionDep,
     loja: Annotated[TokenData, Depends(retornar_loja_atual)]
@@ -195,12 +207,7 @@ def remover_credito(
         raise HTTPException(
             status_code=400, detail="Valor deve ser maior que zero.")
 
-    credito = session.exec(
-        select(LojaJogadorLink).where(
-            LojaJogadorLink.jogador_id == jogador_id,
-            LojaJogadorLink.loja_id == loja.id
-        )
-    ).first()
+    credito = session.get(LojaJogadorLink, credito_id)
 
     if not credito:
         raise HTTPException(status_code=404, detail="Crédito não encontrado.")
@@ -214,7 +221,7 @@ def remover_credito(
     credito.creditos = valor_novo
 
     historico = HistoricoCredito(
-        jogador_id=jogador_id,
+        jogador_id=credito.jogador_id,
         loja_id=loja.id,
         valor_antigo=valor_antigo,
         valor_novo=valor_novo,
