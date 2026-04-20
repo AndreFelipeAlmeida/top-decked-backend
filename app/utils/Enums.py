@@ -13,8 +13,8 @@ class TCG(str, Enum):
             "YUGIOH": "Yu-Gi-Oh!",
             "MAGIC": "Magic: The Gathering",
         }[self.value]
-    
-    
+
+
 class MesEnum(str, Enum):
     Janeiro = "Jan"
     Fevereiro = "Fev"
@@ -70,7 +70,8 @@ class TipoMovimentacaoCredito(str, Enum):
     COMPRA = "compra"
     CADASTRO = "cadastro"
 
-class TipoMovimentacaoEstoque(str, Enum):
+
+class TipoMovimentacaoItem(str, Enum):
     ENTRADA = "entrada"
     SAIDA = "saida"
     VENDA = "venda"

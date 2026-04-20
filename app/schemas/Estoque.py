@@ -1,9 +1,9 @@
 from typing import Optional
 from pydantic import BaseModel
-from app.utils.Enums import TipoMovimentacaoEstoque
+from app.utils.Enums import TipoMovimentacaoItem
 
 
-class MovimentacaoEstoque(BaseModel):
+class MovimentacaoItem(BaseModel):
     quantidade: int
-    tipo: TipoMovimentacaoEstoque
+    tipo: TipoMovimentacaoItem
     descricao: Optional[str] = None
