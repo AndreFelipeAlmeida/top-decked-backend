@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from app.core.db import SessionDep
 from app.utils.datetimeUtil import data_agora_brasil, agora_brasil
-from app.utils.Enums import StatusTorneio, CategoriaItem, TCG, TipoTorneio, TipoMovimentacaoCredito, TipoMovimentacaoEstoque
+from app.utils.Enums import StatusTorneio, CategoriaItem, TCG, TipoTorneio, TipoMovimentacaoCredito, TipoMovimentacaoItem
 from email_validator import validate_email, EmailNotValidError
 from app.core.exception import TopDeckedException
 from sqlmodel import select
@@ -88,6 +88,7 @@ class GameID(SQLModel, table=True):
 
 
 # ---------------------------------- JogadorTorneioLink ----------------------------------
+
 class JogadorTorneioLinkBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: int | None = Field(
@@ -105,12 +106,34 @@ class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):
     torneio: Optional["Torneio"] | None = Relationship(
         back_populates="jogadores")
     tipo_jogador: Optional["TipoJogador"] | None = Relationship()
-    jogador: Optional["Jogador"] | None = Relationship(
+    jogador: Optional["Jogador"] = Relationship(
         back_populates="torneios")
     gameid_importado: Optional[str] = Field(default=None)
 
+    rodadas_como_jogador1: list["Rodada"] = Relationship(
+        back_populates="jogador1",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.jogador1_id]
+        }
+    )
+
+    rodadas_como_jogador2: list["Rodada"] = Relationship(
+        back_populates="jogador2",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.jogador2_id]
+        }
+    )
+
+    rodadas_vencidas: list["Rodada"] = Relationship(
+        back_populates="vencedor",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.vencedor_id]
+        }
+    )
 
 # ---------------------------------- Loja ----------------------------------
+
+
 class LojaBase(SQLModel):
     nome: str = Field(index=True)
     endereco: Optional[str] = Field(default=None, nullable=True)
@@ -132,7 +155,7 @@ class RodadaBase(SQLModel):
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     jogador2_id: Optional[str] = Field(
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
-    vencedor: Optional[str] = Field(
+    vencedor_id: Optional[str] = Field(
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     num_rodada: int = Field(default=None)
     mesa: Optional[int] = Field(default=None)
@@ -146,8 +169,30 @@ class Rodada(RodadaBase, table=True):
     torneio_id: str = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
 
+    jogador1: Optional["JogadorTorneioLink"] = Relationship(
+        back_populates="rodadas_como_jogador1",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.jogador1_id]
+        }
+    )
+
+    jogador2: Optional["JogadorTorneioLink"] = Relationship(
+        back_populates="rodadas_como_jogador2",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.jogador2_id]
+        }
+    )
+
+    vencedor: Optional["JogadorTorneioLink"] = Relationship(
+        back_populates="rodadas_vencidas",
+        sa_relationship_kwargs={
+            "foreign_keys": lambda: [Rodada.vencedor_id]
+        }
+    )
 
 # ---------------------------------- TipoJogador ----------------------------------
+
+
 class TipoJogadorBase(SQLModel):
     nome: str = Field(default=None)
     pt_vitoria: float = Field(default=None)
@@ -205,35 +250,45 @@ class Torneio(TorneioBase, table=True):
     regra_basica: Optional["TipoJogador"] = Relationship()
 
 
-# ---------------------------------- Estoque ----------------------------------
+# ---------------------------------- Categoria de Item ----------------------------------
 
-
-class EstoqueBase(SQLModel):
+class Categoria(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
     nome: str = Field(default=None)
-    categoria: CategoriaItem = Field(sa_column=Column(
-        Enum(CategoriaItem)), default=CategoriaItem.GERAIS)
+
+
+# ---------------------------------- Item ----------------------------------
+
+
+class ItemBase(SQLModel):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    loja_id: int | None = Field(
+        default=None, foreign_key="loja.id")
+    nome: str = Field(default=None)
+    categoria: int = Field(
+        default=None, nullable=False, foreign_key="categoria.id")
     preco: float = Field(default=0)
     min_quantidade: int = Field(default=0)
-    
-class Estoque(EstoqueBase, table=True):
+
+
+class Item(ItemBase, table=True):
     quantidade: int = Field(default=0)
 
 
-# ---------------------------------- Histórico do Estoque ----------------------------------
+# ---------------------------------- Histórico de Itens ----------------------------------
 
 
-class HistoricoEstoque(SQLModel, table=True):
+class HistoricoItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    estoque_id: Optional[int] = Field(foreign_key="estoque.id")
+    item_id: Optional[int] = Field(foreign_key="item.id")
     loja_id: int = Field(foreign_key="loja.id")
 
     # movimentação
     quantidade: Optional[int] = Field(default=None)
-    tipo: TipoMovimentacaoEstoque
+    tipo: TipoMovimentacaoItem
 
     # log de alteração
     campo_alterado: Optional[str] = None
@@ -245,8 +300,8 @@ class HistoricoEstoque(SQLModel, table=True):
 
     descricao: Optional[str] = None
     criado_em: datetime = Field(default_factory=agora_brasil)
-    
-    
+
+
 # ---------------------------------- JogadorLojaLink ----------------------------------
 
 
@@ -278,7 +333,8 @@ class LojaJogadorLink(LojaJogadorLinkBase, table=True):
 
 class HistoricoCredito(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id", nullable=True)
+    jogador_id: Optional[int] = Field(
+        default=None, foreign_key="jogador.id", nullable=True)
     loja_id: int = Field(foreign_key="loja.id")
     valor_antigo: Optional[float] = Field(default=None)
     valor_novo: Optional[float] = Field(default=None)
@@ -287,8 +343,8 @@ class HistoricoCredito(SQLModel, table=True):
     transacao_id: Optional[int] = Field(
         default=None, foreign_key="transacao.id")
     criado_em: datetime = Field(default_factory=agora_brasil)
-    
-    
+
+
 # ---------------------------------- Transações ----------------------------------
 
 
@@ -299,8 +355,8 @@ class Transacao(SQLModel, table=True):
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
     itens: List["ItemTransacao"] = Relationship(back_populates="transacao")
-    
-    
+
+
 # ---------------------------------- Item Transação ----------------------------------
 
 
@@ -311,7 +367,7 @@ class ItemTransacao(SQLModel, table=True):
     transacao: Optional["Transacao"] = Relationship(
         back_populates="itens")
     item_id: Optional[int] = Field(
-        default=None, foreign_key="estoque.id")
+        default=None, foreign_key="item.id")
     quantidade: int = Field(default=0)
     nome_item: str = Field(default="")
     preco_unitario: float = Field(default=0)
