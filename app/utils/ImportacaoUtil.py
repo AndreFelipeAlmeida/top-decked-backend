@@ -156,7 +156,7 @@ def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: s
         partida = Rodada(
             jogador1_id=jogadores_dict[jogador1_id],
             jogador2_id=jogadores_dict[jogador2_id],
-            vencedor=jogadores_dict[vencedor],
+            vencedor_id=jogadores_dict[vencedor],
             torneio_id=torneio_id,
             num_rodada=num_rodada,
             mesa=mesa,
