@@ -6,7 +6,7 @@ from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
 from app.schemas.Jogador import LojaCriarJogador
-from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario, HistoricoCredito
+from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario, HistoricoCredito, Categoria
 from sqlmodel import select
 from app.utils.UsuarioUtil import verificar_novo_usuario
 from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
@@ -53,6 +53,10 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
     session.add(db_loja)
     session.commit()
     session.refresh(db_loja)
+    
+    session.add(Categoria(loja_id=db_loja.id, nome="Gerais"))
+    session.commit()
+
     return db_loja
 
 
