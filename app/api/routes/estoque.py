@@ -5,7 +5,7 @@ from app.core.db import get_session, SessionDep
 from app.models import Item, Loja, HistoricoItem, ItemBase
 from app.dependencies import retornar_loja_atual
 from app.utils.Enums import TipoMovimentacaoItem
-from app.schemas.Estoque import MovimentacaoItem
+from app.schemas.Estoque import MovimentacaoItem, TipoMovimentacaoItemUpdate
 
 
 router = APIRouter(
@@ -30,6 +30,7 @@ def create_item(session: SessionDep, item: Item, current_loja: Loja = Depends(re
     historico = HistoricoItem(item_id=item.id,
                               nome_item=item.nome,
                               loja_id=current_loja.id,
+                              categoria=item.categoria,
                               quantidade=item.quantidade,
                               tipo=TipoMovimentacaoItem.CADASTRO)
 
@@ -102,7 +103,7 @@ def update_item(
     return db_item
 
 
-@router.post("/{id}/movimentar", response_model=Item)
+@router.patch("/{id}/movimentar", response_model=Item)
 def movimentar_item(
     session: SessionDep,
     id: int,
@@ -121,10 +122,10 @@ def movimentar_item(
         raise HTTPException(
             status_code=400, detail="Quantidade deve ser maior que zero.")
 
-    if data.tipo == TipoMovimentacaoItem.ENTRADA:
+    if data.tipo == TipoMovimentacaoItemUpdate.ENTRADA:
         db_item.quantidade += data.quantidade
 
-    elif data.tipo == TipoMovimentacaoItem.SAIDA:
+    elif data.tipo == TipoMovimentacaoItemUpdate.SAIDA:
         if db_item.quantidade < data.quantidade:
             raise HTTPException(
                 status_code=400, detail="Item insuficiente.")

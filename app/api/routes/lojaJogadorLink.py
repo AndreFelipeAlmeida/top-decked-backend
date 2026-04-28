@@ -123,7 +123,7 @@ def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, D
     for credito, loja in creditos:
         credito_data = credito.model_dump()
         credito_data["nome_loja"] = loja.nome
-        credito_data["endereco"] = loja.endereco
+        credito_data["endereco"] = loja.endereco or ""
         creditos_formatados.append(credito_data)
 
     return creditos_formatados
