@@ -151,11 +151,11 @@ class Loja(LojaBase, table=True):
 
 # ---------------------------------- Rodada ----------------------------------
 class RodadaBase(SQLModel):
-    jogador1_id: Optional[str] = Field(
+    jogador1_id: Optional[int] = Field(
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
-    jogador2_id: Optional[str] = Field(
+    jogador2_id: Optional[int] = Field(
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
-    vencedor_id: Optional[str] = Field(
+    vencedor_id: Optional[int] = Field(
         default=None, foreign_key="jogadortorneiolink.id", nullable=True)
     num_rodada: int = Field(default=None)
     mesa: Optional[int] = Field(default=None)
