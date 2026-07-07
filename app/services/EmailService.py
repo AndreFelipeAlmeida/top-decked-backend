@@ -45,3 +45,50 @@ async def processar_ativacao_usuario(
     )
 
     await fastmail.send_message(mensagem)
+
+
+# "tipo" no payload separa esse token do de confirmação de e-mail acima —
+# os dois só têm `sub`/`exp` em comum, então sem essa marca um link antigo
+# de "confirme seu e-mail" (que pode ter ficado esquecido numa caixa de
+# entrada por meses) poderia ser reaproveitado pra redefinir a senha de
+# quem o recebeu. Validade curta (1h, contra as 24h da confirmação de
+# e-mail) porque redefinição de senha é uma ação sensível.
+TIPO_TOKEN_REDEFINICAO_SENHA = "redefinir_senha"
+
+
+def criar_token_redefinicao_senha(email: str) -> str:
+    expiracao = datetime.now(timezone.utc) + timedelta(hours=1)
+    token = jwt.encode(
+        {"sub": email, "tipo": TIPO_TOKEN_REDEFINICAO_SENHA, "exp": expiracao},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    return token
+
+
+async def processar_esqueci_senha(usuario: Usuario) -> None:
+    token = criar_token_redefinicao_senha(usuario.email)
+    link = f"{settings.FRONTEND_URL}/redefinir-senha?token={token}"
+
+    if settings.DEBUG:
+        # Sem isso, testar o fluxo em dev exigiria uma caixa de entrada real
+        # pra cada tentativa — o link aparece no console do servidor.
+        print(f"[DEBUG] Link de redefinição de senha para {usuario.email}: {link}")
+        return
+
+    mensagem = MessageSchema(
+        subject="Redefinição de senha",
+        recipients=[usuario.email],
+        body=(
+            "Olá!\n\n"
+            "Recebemos uma solicitação para redefinir a senha da sua conta na Brickei.\n"
+            "Clique no link abaixo para escolher uma nova senha (válido por 1 hora):\n\n"
+            f"{link}\n\n"
+            "Se você não solicitou isso, ignore este e-mail — sua senha continua a mesma.\n\n"
+            "Atenciosamente,\n"
+            "Equipe Brickei"
+        ),
+        subtype="plain",
+    )
+
+    await fastmail.send_message(mensagem)
