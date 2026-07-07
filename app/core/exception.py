@@ -9,14 +9,14 @@ class TopDeckedException:
             detail=message)
 
     @staticmethod
-    def forbidden():
+    def forbidden(message: str = ""):
         return HTTPException(
             status_code=403,
-            detail="Autenticação negada",
+            detail=message if message else "Autenticação negada",
             headers={"WWW-Authenticate": "Bearer"})
 
     @staticmethod
-    def unauthorized(message: str = None):
+    def unauthorized(message: str = ""):
         return HTTPException(
             status_code=401,
             detail=message if message else "Permissão negada",

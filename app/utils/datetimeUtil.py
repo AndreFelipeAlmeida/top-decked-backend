@@ -22,7 +22,7 @@ def parse_data(data_inicio_str: str) -> date:
     return data.date()
 
 
-def parse_datetime(datetime_inicio_str: str) -> date:
+def parse_datetime(datetime_inicio_str: str) -> datetime:
     brasil_tz = ZoneInfo("America/Fortaleza")
 
     try:
@@ -32,4 +32,4 @@ def parse_datetime(datetime_inicio_str: str) -> date:
         raise TopDeckedException.bad_request(
             "Data de início em formato inválido")
 
-    return data_hora.date()
+    return data_hora

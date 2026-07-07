@@ -1,17 +1,23 @@
 from app.core.config import settings
-from app.core.db import create_db_and_tables
+from app.core.db import create_db_and_tables, engine
 from app.api.main import api_router
+from app.services.ConquistaService import seed_conquistas_catalogo
+from app.services.PokemonCatalogoService import garantir_catalogo_atualizado
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from sqlmodel import Session
 import os
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    with Session(engine) as session:
+        seed_conquistas_catalogo(session)
+        garantir_catalogo_atualizado(session)
     yield
 
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, Depends
 from app.core.db import SessionDep
 from app.schemas.Ranking import Ranking, RankingPorLoja, RankingPorFormato
-from app.utils.RankingUtil import calcula_ranking_geral, calcula_ranking_geral_por_loja, desempenho_por_formato
+from app.services.RankingService import calcula_ranking_geral, calcula_ranking_geral_por_loja, desempenho_por_formato
 from typing import Annotated
 from app.core.security import TokenData
 from app.dependencies import retornar_jogador_atual

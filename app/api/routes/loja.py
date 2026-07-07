@@ -1,23 +1,19 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Request
 import os
 from typing import Annotated
-from sqlalchemy import JSON, func
+from sqlalchemy import func
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
-from app.schemas.Jogador import LojaCriarJogador
-from app.models import Loja, Torneio, Jogador, LojaJogadorLink, GameID, Usuario, HistoricoCredito, Categoria
+from app.schemas.LojaJogadorLink import PromoverOrganizadorDTO
+from app.models import Loja, Torneio, Usuario, Categoria, LojaJogadorLink, LojaJogadorOrganizadorTCG
 from sqlmodel import select
-from app.utils.UsuarioUtil import verificar_novo_usuario
-from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
+from app.services.UsuarioService import verificar_novo_usuario
+from app.services.EmailService import processar_ativacao_usuario
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.Enums import TipoMovimentacaoCredito
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
-from datetime import datetime
 
-from app.core.security import fastmail
-from fastapi_mail import MessageSchema
 from app.utils.Enums import StatusTorneio
 
 router = APIRouter(
@@ -148,13 +144,100 @@ def update_foto(session: SessionDep,
 
 @router.get("/usuario/{usuario_id}", response_model=LojaPublico)
 def retornar_jogador_pelo_usuario(usuario_id: int, session: SessionDep):
-    jogador = session.exec(select(Loja).where(
+    loja = session.exec(select(Loja).where(
         Loja.usuario_id == usuario_id)).first()
-    if not jogador:
-        raise TopDeckedException.not_found("Loja nao encontrado")
+    if not loja:
+        raise TopDeckedException.not_found("Loja não encontrada")
 
-    return jogador
+    return loja
 
+
+@router.post(
+    "/jogador/{jogador_id}/promover",
+    response_model=LojaJogadorOrganizadorTCG
+)
+def promover_jogador(
+    session: SessionDep,
+    token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
+    jogador_id: int,
+    body: PromoverOrganizadorDTO
+):
+
+    link = session.exec(
+        select(LojaJogadorLink)
+        .where(
+            (LojaJogadorLink.loja_id == token_data.id) &
+            (LojaJogadorLink.jogador_id == jogador_id)
+        )
+    ).first()
+
+    if not link:
+        raise TopDeckedException.not_found("Jogador não encontrado")
+
+    organizador_existente = session.exec(
+        select(LojaJogadorOrganizadorTCG)
+        .where(
+            (LojaJogadorOrganizadorTCG.loja_jogador_link_id == link.id) &
+            (LojaJogadorOrganizadorTCG.tcg == body.tcg)
+        )
+    ).first()
+
+    if organizador_existente:
+        raise TopDeckedException.bad_request(
+            f"Jogador já é organizador de {body.tcg}"
+        )
+
+    organizador = LojaJogadorOrganizadorTCG(
+        loja_jogador_link_id=link.id,
+        tcg=body.tcg
+    )
+
+    session.add(organizador)
+    session.commit()
+    session.refresh(organizador)
+
+    return organizador
+
+
+@router.delete(
+    "/jogador/{jogador_id}/despromover",
+    response_model=LojaJogadorOrganizadorTCG
+)
+def despromover_jogador(
+    session: SessionDep,
+    token_data: Annotated[TokenData, Depends(retornar_loja_atual)],
+    jogador_id: int,
+    body: PromoverOrganizadorDTO
+):
+
+    link = session.exec(
+        select(LojaJogadorLink)
+        .where(
+            (LojaJogadorLink.loja_id == token_data.id) &
+            (LojaJogadorLink.jogador_id == jogador_id)
+        )
+    ).first()
+
+    if not link:
+        raise TopDeckedException.not_found("Jogador não encontrado")
+
+    organizador = session.exec(
+        select(LojaJogadorOrganizadorTCG)
+        .where(
+            (LojaJogadorOrganizadorTCG.loja_jogador_link_id == link.id) &
+            (LojaJogadorOrganizadorTCG.tcg == body.tcg)
+        )
+    ).first()
+
+    if not organizador:
+        raise TopDeckedException.bad_request(
+            f"Jogador não é organizador de {body.tcg}"
+        )
+
+    session.delete(organizador)
+    session.commit()
+
+    return organizador
 
 @router.post("/upload_banner", response_model=LojaPublico)
 def update_banner(session: SessionDep,

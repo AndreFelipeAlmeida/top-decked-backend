@@ -4,7 +4,6 @@ from app.core.exception import TopDeckedException
 from app.models import Usuario, Jogador, Loja
 from sqlmodel import select
 from sqlalchemy import func
-from app.core.security import OAUTH2_SCHEME
 
 def verificar_novo_usuario(email: str, session: SessionDep) -> str:
     try:

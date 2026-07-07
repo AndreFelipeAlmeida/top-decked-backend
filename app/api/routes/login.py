@@ -10,7 +10,7 @@ from app.dependencies import retornar_usuario_atual
 from typing import Annotated
 from app.core.exception import TopDeckedException
 
-from app.utils.UsuarioUtil import retornar_info_por_usuario
+from app.services.UsuarioService import retornar_info_por_usuario
 from app.core.db import SessionDep
 
 from jose import jwt

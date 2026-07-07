@@ -1,7 +1,8 @@
 from app.core.db import SessionDep
 from app.models import Torneio, Rodada, JogadorTorneioLink, Jogador
 from sqlmodel import select
-from app.utils.JogadorUtil import retornar_vde_jogador
+from app.services.ComposicaoService import garantir_composicao_partida
+from app.services.JogadorService import retornar_vde_jogador
 from app.utils.datetimeUtil import data_agora_brasil
 
 
@@ -10,7 +11,7 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
                              .where(JogadorTorneioLink.torneio_id == torneio.id)).all()
 
     jogadores = sorted(jogadores, key=lambda j: (
-        j.pontuacao, j.jogador_id), reverse=True)
+        j.pontuacao, j.jogador_criado_id), reverse=True)
     mesa_livre = 1
     rodada_atual = torneio.rodada_atual + 1
 
@@ -18,20 +19,20 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
     result = {}
     for i, jogador in enumerate(jogadores):
         adversario = None
-        if jogando.get(jogador.jogador_id, False):
+        if jogando.get(jogador.id, False):
             continue
 
         for pos_adversario in jogadores[i+1:]:
-            if jogando.get(pos_adversario.jogador_id, False):
+            if jogando.get(pos_adversario.id, False):
                 continue
 
             ja_jogaram = session.exec(
                 select(Rodada).where(
-                    ((Rodada.jogador1_id == jogador.jogador_id) &
-                     (Rodada.jogador2_id == pos_adversario.jogador_id))
+                    ((Rodada.jogador1_id == jogador.id) &
+                     (Rodada.jogador2_id == pos_adversario.id))
                     |
-                    ((Rodada.jogador1_id == pos_adversario.jogador_id) &
-                     (Rodada.jogador2_id == jogador.jogador_id))
+                    ((Rodada.jogador1_id == pos_adversario.id) &
+                     (Rodada.jogador2_id == jogador.id))
                 )
             ).first()
 
@@ -42,8 +43,8 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
             break
 
         nova_rodada = Rodada(
-            jogador1_id=jogador.jogador_id,
-            jogador2_id=adversario.jogador_id if adversario else None,
+            jogador1_id=jogador.id,
+            jogador2_id=adversario.id if adversario else None,
             torneio_id=torneio.id,
             num_rodada=rodada_atual,
             mesa=mesa_livre,
@@ -51,20 +52,30 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
             finalizada=False
         )
         session.add(nova_rodada)
+        session.flush()
 
-        jogando[jogador.jogador_id] = True
+        # Cada lado da rodada (link de participação, não a Jogador ainda —
+        # essa reatribuição só acontece nas linhas abaixo) ganha sua própria
+        # ComposicaoPartida (mesmo id reaproveitado partida a partida pra
+        # TCG/VGC, id novo a cada rodada só pra Pokémon GO — ver
+        # ComposicaoService.garantir_composicao_partida).
+        garantir_composicao_partida(session, nova_rodada.id, jogador, torneio.jogo)
+        if adversario:
+            garantir_composicao_partida(session, nova_rodada.id, adversario, torneio.jogo)
+
+        jogando[jogador.id] = True
         jogador_vde = retornar_vde_jogador(
-            session, jogador.jogador_id, torneio)
+            session, jogador.jogador_criado.jogador_id, torneio)
 
         if adversario:
-            jogando[adversario.jogador_id] = True
+            jogando[adversario.id] = True
             adversario_vde = retornar_vde_jogador(
-                session, adversario.jogador_id, torneio)
+                session, adversario.jogador_criado.jogador_id, torneio)
             adversario = session.exec(select(Jogador)
-                                      .where(Jogador.id == adversario.jogador_id)).first()
+                                      .where(Jogador.id == adversario.jogador_criado.jogador_id)).first()
 
         jogador = session.exec(select(Jogador)
-                               .where(Jogador.id == jogador.jogador_id)).first()
+                               .where(Jogador.id == jogador.jogador_criado.jogador_id)).first()
 
         result[str(nova_rodada.id)] = [
             {

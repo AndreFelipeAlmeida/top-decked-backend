@@ -1,25 +1,32 @@
 from sqlmodel import Field
-from app.models import JogadorBase, LojaJogadorLink
+from app.models import JogadorBase
 from pydantic import BaseModel
 from typing import List
-from app.utils.Enums import MesEnum
+from app.utils.Enums import MesEnum, TCG
 from app.schemas.Torneio import TorneioJogadorPublico
 from datetime import date
 from app.schemas.Usuario import UsuarioPublico
 from app.schemas.GameID import GameIDPublico
+from app.schemas.JogadorCriado import JogadorCriadoPublico
+from app.schemas.LojaJogadorLink import LojaJogadorPublico
 
-    
+
 class JogadorPublico(JogadorBase):
     id: int
     usuario: UsuarioPublico | None
-    tcgs: List[GameIDPublico] = []
+    tcgs: List[JogadorCriadoPublico] = []
     telefone: str | None
     data_nascimento: date | None
 
-
+class JogadorCompleto(JogadorPublico):
+    lojas: list["LojaJogadorPublico"] = []
 
 class PaginatedJogadorPublico(JogadorPublico):
-    lojas: List[LojaJogadorLink]
+    # LojaJogadorLink (a classe da tabela) não expõe relationships
+    # (organizacoes/loja) como campos de pydantic — só LojaJogadorPublico (o
+    # schema) declara isso de verdade. Sem isso, a tabela de "Gerenciar
+    # Jogadores" nunca via se um jogador já era organizador nesta loja.
+    lojas: List["LojaJogadorPublico"]
     
 class PaginatedJogadores(BaseModel):
     data: list[PaginatedJogadorPublico]
@@ -43,14 +50,14 @@ class JogadorLojaPublico(BaseModel):
 
 class JogadorPublicoLoja(JogadorBase):
     id: int
-    tcgs: List[GameIDPublico] | None
+    tcgs: List[JogadorCriadoPublico] | None
     tipo_jogador_id: int | None
 
 
 class JogadorUpdate(JogadorBase):
     nome: str | None = None
     senha: str | None = None
-    tcgs: List[GameIDPublico] | None
+    tcgs: List[GameIDPublico] | None = None
     telefone: str | None = None
     email: str | None = None
     data_nascimento: date | None = None
@@ -69,6 +76,12 @@ class EstatisticasAnuais(BaseModel):
     vitorias: int
     derrotas: int
     empates: int
+
+
+class ImpactoTrocaGameIdPublico(BaseModel):
+    tcg: TCG
+    game_id_atual: str | None
+    torneios_importados: int
 
 
 class JogadorEstatisticas(BaseModel):

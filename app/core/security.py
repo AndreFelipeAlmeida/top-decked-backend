@@ -1,21 +1,19 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
 from sqlmodel import select
 
 from app.models import Usuario
-from app.core.db import SessionDep, get_session
+from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.utils.datetimeUtil import agora_brasil
-from fastapi.security import OAuth2PasswordBearer
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+from fastapi_mail import FastMail, ConnectionConfig
 from app.core.config import settings
-import os
 
 conf = ConnectionConfig(
     MAIL_USERNAME=settings.MAIL_USERNAME,
@@ -72,7 +70,7 @@ def retornar_usuario_pelo_email(email: str, session: SessionDep) -> Usuario | No
 def autenticar(email: str, forms_senha: str, session: SessionDep) -> Usuario | None:
     db_user = retornar_usuario_pelo_email(session=session, email=email)
     if not db_user or not verificar_senha(forms_senha, db_user.senha):
-        raise TopDeckedException.unauthorized()
+        raise TopDeckedException.unauthorized("E-mail ou senha incorretos.")
     if not db_user.is_active:
         raise TopDeckedException.bad_request(
             "Email não confirmado. Verifique sua caixa de entrada.")
@@ -91,7 +89,7 @@ def criar_token_de_acesso(dados: dict, delta_expiracao: timedelta | None = None)
     return encoded_jwt
 
 
-async def validar_token(payload) -> bool:
+async def validar_token(payload, session: SessionDep) -> bool:
     try:
         email = payload.get("email")
         if email is None:
@@ -99,7 +97,6 @@ async def validar_token(payload) -> bool:
     except InvalidTokenError:
         return False
 
-    session = get_session()
     usuario = session.exec(select(Usuario).where(
         Usuario.email == email)).first()
     if usuario is None:

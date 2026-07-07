@@ -5,11 +5,12 @@ from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
-from app.models import LojaJogadorLink, Loja, GameID, Jogador, HistoricoCredito
+from app.models import LojaJogadorLink, Loja, JogadorCriado, Jogador, HistoricoCredito
 from app.utils.Enums import TipoMovimentacaoCredito
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual
 from app.core.security import TokenData
 from app.schemas.LojaJogadorLink import CreditoCreate, CreditoAdd, CreditoJogador, CreditoRemove, LojaJogadorPublico
+from app.schemas.JogadorCriado import JogadorCriadoPublico
 
 router = APIRouter(
     prefix="/creditos",
@@ -59,37 +60,37 @@ def create_credito(
     session: SessionDep,
     loja: Annotated[TokenData, Depends(retornar_loja_atual)]
 ):
-    jogador = session.exec(
-        select(Jogador)
-        .join(GameID, GameID.jogador_id == Jogador.id)
-        .where(
-            (GameID.tcg == credito_create.game_id.tcg) &
-            (GameID.jogador_id == credito_create.game_id.id)
+    # Resolve o game_id só pra achar QUEM é o jogador — o crédito em si nunca
+    # fica preso a um game_id/JogadorCriado sem conta (ver docs/JOGADORES.md).
+    # Sem essa exigência, bastaria alguém digitar o game_id de outra pessoa
+    # pra "reservar" créditos que, quando o dono de verdade se cadastrasse
+    # depois, cairiam na conta dele mesmo sem ele ter pedido nada a esta loja.
+    jogador_criado = session.exec(
+        select(JogadorCriado).where(
+            (JogadorCriado.tcg == credito_create.game_id.tcg) &
+            (JogadorCriado.game_id == credito_create.game_id.id)
         )
     ).first()
 
-    query = select(LojaJogadorLink).where(
-        LojaJogadorLink.loja_id == loja.id
-    )
-
-    if jogador:
-        query = query.where(
-            LojaJogadorLink.jogador_id == jogador.id
-        )
-    else:
-        query = query.where(
-            LojaJogadorLink.game_id == credito_create.game_id.id
+    if not jogador_criado or not jogador_criado.jogador_id:
+        raise TopDeckedException.bad_request(
+            "Este Game ID ainda não está vinculado a nenhuma conta cadastrada "
+            "na plataforma. Peça para o jogador se cadastrar e vincular esse "
+            "Game ID no próprio perfil antes de registrar créditos."
         )
 
-    credito_existente = session.exec(query).first()
+    credito_existente = session.exec(
+        select(LojaJogadorLink).where(
+            (LojaJogadorLink.loja_id == loja.id) &
+            (LojaJogadorLink.jogador_id == jogador_criado.jogador_id)
+        )
+    ).first()
 
     if credito_existente:
         raise TopDeckedException.bad_request("Jogador já cadastrado")
 
     credito = LojaJogadorLink(
-        jogador_id=jogador.id if jogador else None,
-        game_id=credito_create.game_id.id,
-        tcg=credito_create.game_id.tcg,
+        jogador_id=jogador_criado.jogador_id,
         apelido=credito_create.apelido,
         loja_id=loja.id,
         creditos=0
@@ -99,7 +100,7 @@ def create_credito(
     session.flush()
 
     historico = HistoricoCredito(
-        jogador_id=credito.jogador_id,
+        jogador_id=jogador_criado.jogador_id,
         loja_id=loja.id,
         tipo=TipoMovimentacaoCredito.CADASTRO,
         descricao="Ligação entre jogador e loja cadastrada"
@@ -114,9 +115,17 @@ def create_credito(
 
 @router.get("/jogador", response_model=List[CreditoJogador])
 def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, Depends(retornar_jogador_atual)]):
-    creditos = session.exec(select(LojaJogadorLink, Loja)
-                            .join(Loja, Loja.id == LojaJogadorLink.loja_id)
-                            .where(LojaJogadorLink.jogador_id == jogador.id)).all()
+    # jogador_id é a única âncora agora (ver docs/JOGADORES.md) — não há mais
+    # crédito preso a um JogadorCriado sem conta pra "herdar" ao se cadastrar.
+    creditos = session.exec(
+        select(LojaJogadorLink, Loja)
+        .join(Loja, Loja.id == LojaJogadorLink.loja_id)
+        .where(LojaJogadorLink.jogador_id == jogador.id)
+    ).all()
+
+    jogador_atual = session.exec(
+        select(Jogador).where(Jogador.id == jogador.id).options(selectinload(Jogador.tcgs))
+    ).first()
 
     creditos_formatados = []
 
@@ -124,6 +133,10 @@ def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, D
         credito_data = credito.model_dump()
         credito_data["nome_loja"] = loja.nome
         credito_data["endereco"] = loja.endereco or ""
+        tcgs = jogador_atual.tcgs if jogador_atual else []
+        credito_data["jogador"] = {
+            "tcgs": [JogadorCriadoPublico.model_validate(t, from_attributes=True) for t in tcgs]
+        }
         creditos_formatados.append(credito_data)
 
     return creditos_formatados
@@ -137,17 +150,19 @@ def get_creditos_by_loja(
 ):
     query = (
         select(LojaJogadorLink)
-        .options(selectinload(LojaJogadorLink.jogador))
+        .options(selectinload(LojaJogadorLink.jogador).selectinload(Jogador.tcgs))
         .where(LojaJogadorLink.loja_id == loja.id)
     )
 
     if search:
         query = query.where(
             or_(
-                LojaJogadorLink.game_id.ilike(f"%{search}%"),
                 LojaJogadorLink.apelido.ilike(f"%{search}%"),
                 LojaJogadorLink.jogador.has(
                     Jogador.nome.ilike(f"%{search}%")
+                ),
+                LojaJogadorLink.jogador.has(
+                    Jogador.tcgs.any(JogadorCriado.game_id.ilike(f"%{search}%"))
                 ),
             )
         )

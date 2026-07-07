@@ -1,29 +1,35 @@
 from app.core.db import SessionDep
 from app.schemas.Ranking import Ranking, RankingPorLoja, RankingPorFormato
 from sqlmodel import select, extract
-from app.models import Jogador, JogadorTorneioLink, Rodada, Loja, Torneio
+from app.models import Jogador, JogadorCriado, JogadorTorneioLink, Rodada, Loja, Torneio
 from app.utils.Enums import StatusTorneio, TCG
 from collections import defaultdict
 
 
 def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
-    jogadores = session.exec(
-        select(Jogador)
+    # Itera JogadorCriado (não Jogador) — é a âncora de toda participação em
+    # torneio, com ou sem conta real vinculada (ver docs/JOGADORES.md). Sem
+    # isso, jogadores importados/cadastrados pela loja sem cadastro na
+    # plataforma nunca apareceriam no ranking.
+    jogadores_criados = session.exec(
+        select(JogadorCriado).where(JogadorCriado.tcg == TCG.POKEMON)
     ).all()
     ranking = []
 
-    for jogador in jogadores:
+    for jogador_criado in jogadores_criados:
         total_pontos = 0
         total_torneios = 0
         total_vitorias = 0
         total_derrotas = 0
         total_empates = 0
-        game_id = next(
-            (g.game_id for g in jogador.tcgs if g.tcg == TCG.POKEMON),
-            None
-        )
+        jogador = jogador_criado.jogador
 
-        for link in jogador.torneios:
+        links = session.exec(
+            select(JogadorTorneioLink).where(
+                JogadorTorneioLink.jogador_criado_id == jogador_criado.id)
+        ).all()
+
+        for link in links:
             torneio = link.torneio
             if not torneio:
                 continue
@@ -34,8 +40,8 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
             rodadas = select(Rodada).join(Torneio).where(
                 (Torneio.status == StatusTorneio.FINALIZADO) &
                 (Rodada.torneio_id == link.torneio_id) &
-                ((Rodada.jogador1_id == jogador.id) |
-                 (Rodada.jogador2_id == jogador.id))
+                ((Rodada.jogador1_id == link.id) |
+                 (Rodada.jogador2_id == link.id))
             )
             if mes:
                 rodadas = rodadas.where(
@@ -46,9 +52,9 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
 
             rodadas = session.exec(rodadas).all()
             for rodada in rodadas:
-                if (rodada.vencedor == jogador.id):
+                if (rodada.vencedor_id == link.id):
                     total_vitorias += 1
-                elif (rodada.vencedor is not None):
+                elif (rodada.vencedor_id is not None):
                     total_derrotas += 1
                 else:
                     total_empates += 1
@@ -56,15 +62,18 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
             continue
 
         ranking.append(Ranking(
-            jogador_id=jogador.id,
-            game_id=game_id,
-            nome_jogador=jogador.nome,
+            jogador_id=jogador.id if jogador else None,
+            game_id=jogador_criado.game_id,
+            nome_jogador=jogador.nome if jogador else jogador_criado.apelido,
             pontos=total_pontos,
             torneios=total_torneios,
             vitorias=total_vitorias,
             derrotas=total_derrotas,
             empates=total_empates,
-            taxa_vitoria=calcular_taxa_vitoria(session, jogador)
+            taxa_vitoria=calcular_taxa_vitoria(session, jogador) if jogador else (
+                int((total_vitorias / (total_vitorias + total_derrotas + total_empates)) * 100)
+                if (total_vitorias + total_derrotas + total_empates) > 0 else 0
+            )
         ))
 
     ranking.sort(key=lambda x: x.pontos, reverse=True)
@@ -74,21 +83,31 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
 
 def calcula_ranking_geral_por_loja(session: SessionDep, mes: int = None):
     lojas = session.exec(select(Loja)).all()
-    jogadores = session.exec(select(Jogador)).all()
     ranking = []
     for loja in lojas:
-        for jogador in jogadores:
-            links = session.exec(
-                select(JogadorTorneioLink)
-                .join(JogadorTorneioLink.torneio)
-                .where(
-                    JogadorTorneioLink.jogador_id == jogador.id,
-                    Torneio.loja_id == loja.id))
+        jogadores_criados_da_loja = session.exec(
+            select(JogadorCriado)
+            .join(JogadorTorneioLink, JogadorTorneioLink.jogador_criado_id == JogadorCriado.id)
+            .join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
+            .where(Torneio.loja_id == loja.id)
+            .distinct()
+        ).all()
+
+        for jogador_criado in jogadores_criados_da_loja:
+            jogador = jogador_criado.jogador
+            links = select(JogadorTorneioLink).where(
+                (JogadorTorneioLink.jogador_criado_id == jogador_criado.id) &
+                (JogadorTorneioLink.torneio_id.in_(
+                    select(Torneio.id).where(Torneio.loja_id == loja.id)
+                ))
+            )
 
             if mes is not None:
-                links = links.where(
-                    extract("month", Torneio.data_inicio) == mes).all()
-            if (links == []):
+                links = (links.join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
+                         .where(extract("month", Torneio.data_planejada) == mes))
+
+            links = session.exec(links).all()
+            if not links:
                 continue
             total_pontos = 0
             total_torneios = 0
@@ -102,15 +121,15 @@ def calcula_ranking_geral_por_loja(session: SessionDep, mes: int = None):
                 rodadas = session.exec(
                     select(Rodada).where(
                         (Rodada.torneio_id == link.torneio_id) &
-                        ((Rodada.jogador1_id == jogador.id) |
-                         (Rodada.jogador2_id == jogador.id))
+                        ((Rodada.jogador1_id == link.id) |
+                         (Rodada.jogador2_id == link.id))
                     )
                 ).all()
 
                 for rodada in rodadas:
-                    if (rodada.vencedor == jogador.id):
+                    if (rodada.vencedor_id == link.id):
                         total_vitorias += 1
-                    elif (rodada.vencedor is not None):
+                    elif (rodada.vencedor_id is not None):
                         total_derrotas += 1
                     else:
                         total_empates += 1
@@ -123,7 +142,7 @@ def calcula_ranking_geral_por_loja(session: SessionDep, mes: int = None):
                                * 100) if total_rodadas > 0 else 0
 
             ranking.append(RankingPorLoja(
-                nome_jogador=jogador.nome,
+                nome_jogador=jogador.nome if jogador else jogador_criado.apelido,
                 nome_loja=loja.nome,
                 pontos=total_pontos,
                 torneios=total_torneios,
@@ -142,9 +161,10 @@ def desempenho_por_formato(session: SessionDep, jogador: Jogador) -> list[Rankin
     links = session.exec(
         select(JogadorTorneioLink)
         .join(Torneio)
+        .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
         .where(
             (Torneio.status == StatusTorneio.FINALIZADO) &
-            (JogadorTorneioLink.jogador_id == jogador.id))
+            (JogadorCriado.jogador_id == jogador.id))
     ).all()
 
     if not links:

@@ -1,21 +1,20 @@
 from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Request, Query
 from sqlmodel import select
-from app.schemas.Jogador import JogadorPublico, JogadorUpdate, JogadorCriar, JogadorLojaPublico, PaginatedJogadores
+from app.schemas.Jogador import JogadorCompleto, JogadorPublico, JogadorUpdate, JogadorCriar, JogadorLojaPublico, PaginatedJogadores, ImpactoTrocaGameIdPublico
 from app.core.db import SessionDep
-from typing import Annotated, List
+from typing import Annotated
 from app.core.security import TokenData
 from app.core.exception import TopDeckedException
-from app.core.security import TokenData
-from app.core.config import settings
-from app.models import Usuario, Jogador, JogadorTorneioLink, Torneio, LojaJogadorLink, GameID
-from app.utils.UsuarioUtil import verificar_novo_usuario
-from app.utils.JogadorUtil import vincular_historico_e_creditos, calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas
+from app.models import Usuario, Jogador, JogadorTorneioLink, LojaJogadorLink, JogadorCriado
+from app.utils.Enums import TCG
+from app.services.UsuarioService import verificar_novo_usuario
+from app.services.JogadorService import vincular_historico_e_creditos, calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas, contar_impacto_troca_gameid
+from app.services.ConquistaService import recalcular_conquistas_jogador
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.emailUtil import criar_token_confirmacao, processar_ativacao_usuario
+from app.services.EmailService import processar_ativacao_usuario
 from app.dependencies import retornar_jogador_atual, retornar_loja_atual
-from typing import Annotated
 import os
 
 
@@ -49,6 +48,40 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
     session.refresh(db_jogador)
     return db_jogador
 
+@router.get(
+    "/me",
+    response_model=JogadorCompleto
+)
+def retornar_meu_jogador(
+    session: SessionDep,
+    token_data: Annotated[
+        TokenData,
+        Depends(retornar_jogador_atual)
+    ]
+):
+    jogador = session.exec(
+        select(Jogador)
+        .where(Jogador.id == token_data.id)
+        .options(
+            selectinload(Jogador.usuario),
+
+            selectinload(Jogador.tcgs),
+
+            selectinload(Jogador.lojas)
+            .selectinload(LojaJogadorLink.loja),
+
+            selectinload(Jogador.lojas)
+            .selectinload(
+                LojaJogadorLink.organizacoes
+            )
+        )
+    ).first()
+
+    if not jogador:
+        raise TopDeckedException.not_found(
+            "Jogador não encontrado"
+        )
+    return jogador
 
 @router.get("/estatisticas")
 def get_estatisticas(session: SessionDep,
@@ -93,6 +126,38 @@ def retornar_historico(session: SessionDep,
     return retornar_historico_jogador(session, jogador)
 
 
+@router.get("/impacto-troca-gameid", response_model=ImpactoTrocaGameIdPublico)
+def get_impacto_troca_gameid(
+    session: SessionDep,
+    tcg: TCG,
+    token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+):
+    """Quantos torneios importados o jogador perde a atribuição se trocar o
+    GameID atual deste TCG por outro — usado pelo aviso de confirmação na tela
+    de perfil antes de uma troca de verdade acontecer. Não inclui mais
+    créditos de loja: LojaJogadorLink aponta direto pra jogador_id (conta
+    real), então trocar de Game ID nunca afeta créditos (ver
+    docs/JOGADORES.md)."""
+    gameid_atual = session.exec(
+        select(JogadorCriado).where(
+            (JogadorCriado.jogador_id == token_data.id) & (JogadorCriado.tcg == tcg)
+        )
+    ).first()
+
+    if not gameid_atual:
+        return ImpactoTrocaGameIdPublico(
+            tcg=tcg, game_id_atual=None, torneios_importados=0
+        )
+
+    torneios = contar_impacto_troca_gameid(session, token_data.id, tcg, gameid_atual.game_id)
+
+    return ImpactoTrocaGameIdPublico(
+        tcg=tcg,
+        game_id_atual=gameid_atual.game_id,
+        torneios_importados=torneios,
+    )
+
+
 @router.get("/usuario/{usuario_id}", response_model=JogadorPublico)
 def retornar_jogador_pelo_usuario(usuario_id: int, session: SessionDep):
     jogador = session.exec(select(Jogador).where(
@@ -121,13 +186,22 @@ def get_jogadores(
 ):
     offset = (page - 1) * limit
 
-    query = select(Jogador).options(selectinload(Jogador.tcgs))
+    # lojas.organizacoes precisa vir eager-loaded: a tabela de "Gerenciar
+    # Jogadores" (PlayersTable.tsx) decide se mostra "Promover" ou
+    # "Despromover" com base nisso — sem eager load, a relação de segundo
+    # nível não é carregada e o front nunca vê o estado atual (sempre
+    # aparenta que ninguém é organizador).
+    query = select(Jogador).options(
+        selectinload(Jogador.tcgs),
+        selectinload(Jogador.lojas).selectinload(LojaJogadorLink.organizacoes),
+        selectinload(Jogador.lojas).selectinload(LojaJogadorLink.loja),
+    )
 
     if search:
         query = query.where(
             or_(
                 Jogador.nome.ilike(f"%{search}%"),
-                Jogador.tcgs.any(GameID.id.ilike(f"%{search}%"))
+                Jogador.tcgs.any(JogadorCriado.game_id.ilike(f"%{search}%"))
             )
         )
 
@@ -175,6 +249,17 @@ def update_jogador(novo: JogadorUpdate,
     session.add(jogador)
     session.commit()
     session.refresh(jogador)
+
+    if novo.tcgs:
+        # Trocar/vincular um GameID pode ligar retroativamente todo um
+        # histórico de torneios importados a este jogador (ver
+        # vincular_historico_e_creditos) — sem isso, conquistas baseadas
+        # nesse histórico (horas jogadas, torneios jogados, vitórias) só
+        # seriam atualizadas na próxima vez que algo disparasse o recálculo
+        # (ex.: finalizar um torneio novo), ficando visivelmente desatualizadas
+        # até lá.
+        recalcular_conquistas_jogador(session, jogador.id)
+
     return jogador
 
 
@@ -199,8 +284,11 @@ def torneios_inscritos(session: SessionDep,
                        token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
     jogador = session.get(Jogador, token_data.id)
 
-    inscricoes = session.exec(select(JogadorTorneioLink)
-                              .where(JogadorTorneioLink.jogador_id == jogador.id)).all()
+    inscricoes = session.exec(
+        select(JogadorTorneioLink)
+        .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
+        .where(JogadorCriado.jogador_id == jogador.id)
+    ).all()
 
     if not inscricoes:
         raise TopDeckedException.not_found(

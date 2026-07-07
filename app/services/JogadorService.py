@@ -1,10 +1,11 @@
 from collections import defaultdict
 from app.core.db import SessionDep
-from app.models import Jogador, JogadorTorneioLink, Torneio, Rodada, LojaJogadorLink, GameID
+from app.models import Jogador, JogadorTorneioLink, Torneio, Rodada, JogadorCriado
 from sqlmodel import select
+from sqlalchemy import func
 from typing import List
-from app.utils.Enums import MesEnum
-from app.utils.RankingUtil import calcula_ranking_geral, calcular_taxa_vitoria
+from app.utils.Enums import MesEnum, TCG
+from app.services.RankingService import calcula_ranking_geral, calcular_taxa_vitoria
 from app.utils.datetimeUtil import data_agora_brasil
 from app.utils.Enums import StatusTorneio, TipoTorneio
 from app.schemas.GameID import GameIDPublico
@@ -22,9 +23,10 @@ def calcular_estatisticas(session: SessionDep, jogador: Jogador):
     estat_por_mes = _retornar_estatisticas_mensais(session, jogador.id)
     torneios_links = session.exec(select(JogadorTorneioLink)
                                   .join(Torneio)
+                                  .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
                                   .where(
                                       (Torneio.status == StatusTorneio.FINALIZADO) &
-                                      (JogadorTorneioLink.jogador_id == jogador.id))).all()
+                                      (JogadorCriado.jogador_id == jogador.id))).all()
 
     torneio_totais = len(torneios_links)
     torneios_historico = _retornar_estatisticas_torneio(
@@ -55,7 +57,7 @@ def _retornar_estatisticas_torneio(session: SessionDep, jogador: Jogador,
         estatisticas.append({
             "id": link.torneio_id,
             "nome": link.torneio.nome,
-            "data_inicio": link.torneio.data_inicio,
+            "data_planejada": link.torneio.data_planejada,
             "colocacao": colocacao,
             "participantes": len(link.torneio.jogadores),
             "pontuacao": link.pontuacao_com_regras
@@ -74,15 +76,16 @@ def _retornar_estatisticas_mensais(session: SessionDep, jogador_id: str):
     links = session.exec(
         select(JogadorTorneioLink)
         .join(Torneio)
+        .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
         .where((Torneio.status == StatusTorneio.FINALIZADO) &
-               (JogadorTorneioLink.jogador_id == jogador_id))
+               (JogadorCriado.jogador_id == jogador_id))
     ).all()
 
     estatisticas = defaultdict(
         lambda: {"pontos": 0, "vitorias": 0, "derrotas": 0, "empates": 0})
     for link in links:
-        ano = link.torneio.data_inicio.year
-        mes = link.torneio.data_inicio.month
+        ano = link.torneio.data_planejada.year
+        mes = link.torneio.data_planejada.month
         chave = (ano, mes)
         estatisticas[chave]["pontos"] += link.pontuacao_com_regras or 0
 
@@ -122,7 +125,7 @@ def colocacao_jogador(session: SessionDep, torneio: Torneio, jogador: Jogador):
     ranking.sort(key=lambda x: (x[1], x[2]), reverse=True)
 
     for i, (j, _, _) in enumerate(ranking, start=1):
-        if j.jogador_id == jogador.id:
+        if j.jogador_criado and j.jogador_criado.jogador_id == jogador.id:
             return i
     return None
 
@@ -134,19 +137,21 @@ def calcular_forca_oponente(session: SessionDep, torneio: Torneio, link: Jogador
     ).all()
 
     for rodada in rodadas:
-        if rodada.vencedor == link.jogador_id:
-            oponente_id = rodada.jogador2_id if rodada.jogador1_id == link.jogador_id else rodada.jogador1_id
-            oponentes_vencidos.append(oponente_id)
+        if rodada.vencedor_id == link.id:
+            oponente_link_id = rodada.jogador2_id if rodada.jogador1_id == link.id else rodada.jogador1_id
+            if oponente_link_id:
+                oponentes_vencidos.append(oponente_link_id)
 
     if not oponentes_vencidos:
         return 0
 
     taxas = []
-    for op_id in oponentes_vencidos:
-        if op_id:
-            op_jogador = session.exec(
-                select(Jogador).where(Jogador.id == op_id)).first()
-            taxas.append(calcular_taxa_vitoria(session, op_jogador))
+    for op_link_id in oponentes_vencidos:
+        oponente_link = session.get(JogadorTorneioLink, op_link_id)
+        if oponente_link and oponente_link.jogador_criado and oponente_link.jogador_criado.jogador_id:
+            op_jogador = session.get(Jogador, oponente_link.jogador_criado.jogador_id)
+            if op_jogador:
+                taxas.append(calcular_taxa_vitoria(session, op_jogador))
 
     return sum(taxas) / len(taxas) if len(taxas) != 0 else 0
 
@@ -298,36 +303,78 @@ def retornar_vde_jogador_finalizados(session: SessionDep, jogador_id: str, torne
     return vde
 
 
-def _atualizar_jogador_id(session: SessionDep, objetos: list, jogador_id: int):
-    for objeto in objetos:
-        if objeto.jogador_id:
-            session.rollback()
-            raise TopDeckedException.bad_request(
-                "Game ID Já cadastrado em outra conta")
+def contar_impacto_troca_gameid(session: SessionDep, jogador_id: int, tcg: TCG, gameid_atual: str) -> int:
+    """Quantos torneios importados o jogador perde a atribuição se deixar de
+    usar `gameid_atual` para este TCG — conta em cima do JogadorCriado que
+    hoje carrega esse game_id/tcg (ver desvincular_gameid_antigo). Como todo
+    torneio importado aponta pro JogadorCriado (nunca pro Jogador direto), a
+    contagem é só "quantos vínculos existem nele", sem precisar casar por
+    string. Não conta mais créditos de loja: LojaJogadorLink agora só aponta
+    pra jogador_id (conta real), nunca pro JogadorCriado/game_id — trocar de
+    Game ID não afeta créditos de jeito nenhum (ver docs/JOGADORES.md)."""
+    jogador_criado_atual = session.exec(
+        select(JogadorCriado).where(
+            (JogadorCriado.jogador_id == jogador_id) &
+            (JogadorCriado.tcg == tcg) &
+            (JogadorCriado.game_id == gameid_atual)
+        )
+    ).first()
 
-        objeto.jogador_id = jogador_id
-        session.add(objeto)
+    if not jogador_criado_atual:
+        return 0
+
+    torneios = session.exec(
+        select(func.count(JogadorTorneioLink.id))
+        .join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
+        .where(
+            (JogadorTorneioLink.jogador_criado_id == jogador_criado_atual.id) &
+            (Torneio.tipo == TipoTorneio.IMPORTADO)
+        )
+    ).one()
+
+    return torneios
+
+
+def desvincular_gameid_antigo(session: SessionDep, jogador_criado_antigo: JogadorCriado):
+    """Ao trocar de GameID, o jogador perde a atribuição (não o histórico em
+    si, só a ligação com esta conta) dos torneios importados e créditos de
+    loja que apontam pro JogadorCriado antigo — como eles apontam pro
+    JogadorCriado (não pro Jogador direto), basta desmarcar jogador_id aqui;
+    os vínculos existentes "seguem" automaticamente, sem precisar reatribuir
+    linha por linha."""
+    jogador_criado_antigo.jogador_id = None
+    session.add(jogador_criado_antigo)
 
 
 def vincular_historico_e_creditos(session: SessionDep, game_ids: List[GameIDPublico], jogador_id: int):
     for game_id in game_ids:
-        participacoes = session.exec(select(JogadorTorneioLink)
-                                     .join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
-                                     .where((JogadorTorneioLink.gameid_importado == game_id.id) &
-                                            (Torneio.tcg == game_id.tcg) &
-                                            (Torneio.tipo == TipoTorneio.IMPORTADO)))
+        jogador_criado_existente = session.exec(
+            select(JogadorCriado).where(
+                (JogadorCriado.game_id == game_id.id) & (JogadorCriado.tcg == game_id.tcg)
+            )
+        ).first()
 
-        lojas = session.exec(select(LojaJogadorLink)
-                             .where((LojaJogadorLink.game_id == game_id.id) &
-                                    (LojaJogadorLink.tcg == game_id.tcg)))
-
-        game_id_existente = session.get(GameID, (game_id.id, game_id.tcg))
-        
-        if game_id_existente:
+        if (jogador_criado_existente and jogador_criado_existente.jogador_id
+                and jogador_criado_existente.jogador_id != jogador_id):
             raise TopDeckedException.bad_request("Game ID Já cadastrado em outra conta")
-        
-        _atualizar_jogador_id(session, participacoes, jogador_id)
-        _atualizar_jogador_id(session, lojas, jogador_id)
-        
-        game_id = GameID(id=game_id.id, jogador_id=jogador_id, tcg=game_id.tcg)
-        session.add(game_id)
+
+        # JogadorCriado tem UniqueConstraint em (jogador_id, tcg) — um jogador
+        # só pode reivindicar um game_id por TCG. Trocar de ID (não só vincular
+        # o primeiro) precisa desvincular o JogadorCriado antigo antes, senão
+        # o jogador ficaria "dono" de dois JogadorCriado do mesmo TCG ao
+        # mesmo tempo (viola a constraint).
+        jogador_criado_antigo = session.exec(
+            select(JogadorCriado).where(
+                (JogadorCriado.jogador_id == jogador_id) & (JogadorCriado.tcg == game_id.tcg)
+            )
+        ).first()
+        novo_id = jogador_criado_existente.id if jogador_criado_existente else None
+        if jogador_criado_antigo and jogador_criado_antigo.id != novo_id:
+            desvincular_gameid_antigo(session, jogador_criado_antigo)
+            session.flush()
+
+        if jogador_criado_existente:
+            jogador_criado_existente.jogador_id = jogador_id
+            session.add(jogador_criado_existente)
+        else:
+            session.add(JogadorCriado(game_id=game_id.id, tcg=game_id.tcg, jogador_id=jogador_id))

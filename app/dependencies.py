@@ -4,23 +4,26 @@ from app.core.security import (
     SECRET_KEY,
     TokenData, validar_token)
 from app.core.exception import TopDeckedException
+from app.core.db import SessionDep
 
 from typing import Annotated
 from fastapi import Depends
 import jwt
 
 
-async def retornar_usuario_atual(token: Annotated[str, Depends(OAUTH2_SCHEME)]):
+async def retornar_usuario_atual(token: Annotated[str, Depends(OAUTH2_SCHEME)], session: SessionDep):
     try:
         payload = jwt.decode(
             token,
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
-        if not validar_token(payload=payload):
+        if not await validar_token(payload=payload, session=session):
             raise TopDeckedException.unauthorized()
     except jwt.ExpiredSignatureError:
         raise TopDeckedException.unauthorized("Token expirado")
+    except jwt.InvalidTokenError:
+        raise TopDeckedException.unauthorized("Token inválido")
 
     id = payload.get("id")
     tipo = payload.get("tipo")

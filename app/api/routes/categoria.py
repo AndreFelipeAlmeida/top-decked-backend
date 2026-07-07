@@ -7,7 +7,6 @@ from app.core.db import SessionDep
 from sqlmodel import select
 from fastapi import APIRouter, Depends
 from typing import Annotated
-from fastapi import APIRouter
 
 router = APIRouter(prefix="/estoque/categoria", tags=["categoria"])
 
