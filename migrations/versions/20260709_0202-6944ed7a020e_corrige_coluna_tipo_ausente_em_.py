@@ -42,10 +42,16 @@ def upgrade() -> None:
     colunas = {c["name"] for c in sa.inspect(conn).get_columns("jogadortorneiolink")}
 
     if "tipo" not in colunas:
+        # No Postgres o tipo ENUM nativo pode já não existir neste cenário
+        # (banco legado que nunca rodou `ba9d81184506` de verdade) — sem
+        # este .create() o add_column falha com "type ... does not exist".
+        tipo_participante_enum = sa.Enum("JOGADOR", "JUIZ", name="tipoparticipantetorneio")
+        tipo_participante_enum.create(conn, checkfirst=True)
+
         with op.batch_alter_table("jogadortorneiolink", schema=None) as batch_op:
             batch_op.add_column(sa.Column(
                 "tipo",
-                sa.Enum("JOGADOR", "JUIZ", name="tipoparticipantetorneio"),
+                tipo_participante_enum,
                 nullable=False,
                 server_default="JOGADOR",
             ))
