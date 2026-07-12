@@ -101,9 +101,50 @@ class StatusTorneio(str, Enum):
     FINALIZADO = "FINALIZADO"
 
 
+# Toda Loja nasce PENDENTE — mesmo já com e-mail confirmado
+# (Usuario.is_active) — e só pode autenticar depois de um Administrador
+# aprovar o cadastro.
+class StatusAprovacaoLoja(str, Enum):
+    PENDENTE = "PENDENTE"
+    APROVADA = "APROVADA"
+    REJEITADA = "REJEITADA"
+
+
 class TipoTorneio(str, Enum):
     IMPORTADO = "IMPORTADO"
     CRIADO = "CRIADO"
+
+
+class TipoParticipanteTorneio(str, Enum):
+    # Papel do jogador DENTRO de um torneio específico (JogadorTorneioLink.tipo)
+    # — não confundir com a conta em si (Jogador/JogadorCriado), que não tem
+    # papel nenhum, só participações. Um JUIZ ganha pontuação extra normalmente
+    # (ver docs/PONTUACAO_EXTRA.md) mas não entra no pareamento de rodadas nem
+    # no ranking/pódio DESSE torneio — só no ranking geral entre torneios.
+    # Um jogador só tem UMA linha de JogadorTorneioLink por torneio (fonte
+    # única de verdade); JOGADOR_E_JUIZ é o valor usado quando ele acumula
+    # os dois papéis nesse torneio, em vez de duas linhas separadas.
+    JOGADOR = "JOGADOR"
+    JUIZ = "JUIZ"
+    JOGADOR_E_JUIZ = "JOGADOR_E_JUIZ"
+
+
+class MotivoPontuacaoExtra(str, Enum):
+    NOVATO = "NOVATO"   # "Trouxe um Novato"
+    JUIZ = "JUIZ"
+    OUTROS = "OUTROS"
+
+
+class TipoRegraPontuacaoEvento(str, Enum):
+    # Gatilho automático que uma regra de pontuação de Evento observa nos
+    # torneios do período (ver docs/EVENTOS.md) — contabilizado a partir de
+    # JogadorTorneioLink.vitorias/derrotas/empates (já calculados pelo
+    # desempate suíço, ver docs/RANKING.md) e da simples presença do
+    # jogador num torneio (participação).
+    VITORIA = "VITORIA"
+    DERROTA = "DERROTA"
+    EMPATE = "EMPATE"
+    PARTICIPACAO = "PARTICIPACAO"
 
 
 class TipoMovimentacaoCredito(str, Enum):

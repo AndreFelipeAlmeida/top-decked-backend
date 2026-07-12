@@ -4,11 +4,22 @@ from sqlmodel import select
 from app.services.ComposicaoService import garantir_composicao_partida
 from app.services.JogadorService import retornar_vde_jogador
 from app.utils.datetimeUtil import data_agora_brasil
+from app.utils.Enums import TipoParticipanteTorneio
 
 
 def nova_rodada(session: SessionDep, torneio: Torneio):
+    # Quem é só Juiz (JogadorTorneioLink.tipo == JUIZ, ver
+    # docs/PONTUACAO_EXTRA.md) não joga partidas — só recebe pontuação extra
+    # — então nunca entra no pareamento suíço; JOGADOR_E_JUIZ entra
+    # normalmente, é jogador de verdade também.
     jogadores = session.exec(select(JogadorTorneioLink)
-                             .where(JogadorTorneioLink.torneio_id == torneio.id)).all()
+                             .where(
+                                 (JogadorTorneioLink.torneio_id == torneio.id) &
+                                 (JogadorTorneioLink.tipo.in_([
+                                     TipoParticipanteTorneio.JOGADOR,
+                                     TipoParticipanteTorneio.JOGADOR_E_JUIZ,
+                                 ]))
+                             )).all()
 
     jogadores = sorted(jogadores, key=lambda j: (
         j.pontuacao, j.jogador_criado_id), reverse=True)

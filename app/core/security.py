@@ -8,28 +8,13 @@ from pydantic import BaseModel
 
 from sqlmodel import select
 
-from app.models import Usuario
+from app.models import Usuario, Loja
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.utils.datetimeUtil import agora_brasil
-from fastapi_mail import FastMail, ConnectionConfig
+from app.utils.Enums import StatusAprovacaoLoja
 from app.core.config import settings
 
-conf = ConnectionConfig(
-    MAIL_USERNAME=settings.MAIL_USERNAME,
-    MAIL_PASSWORD=settings.MAIL_PASSWORD,
-    MAIL_FROM=settings.MAIL_FROM,
-    MAIL_PORT=587,
-    MAIL_SERVER="smtp.gmail.com",
-
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-
-    USE_CREDENTIALS=True,
-    VALIDATE_CERTS=True
-)
-
-fastmail = FastMail(conf)
 
 SECRET_KEY = settings.SECURITY_SECRET_KEY
 ALGORITHM = settings.SECURITY_ALGORITHM
@@ -74,6 +59,17 @@ def autenticar(email: str, forms_senha: str, session: SessionDep) -> Usuario | N
     if not db_user.is_active:
         raise TopDeckedException.bad_request(
             "Email não confirmado. Verifique sua caixa de entrada.")
+
+    # Bloqueado aqui, no login, pra nunca emitir um token pra uma loja
+    # pendente/rejeitada de aprovação.
+    if db_user.tipo == "loja":
+        loja = session.exec(select(Loja).where(Loja.usuario_id == db_user.id)).first()
+        if loja and loja.status == StatusAprovacaoLoja.PENDENTE:
+            raise TopDeckedException.forbidden(
+                "Seu cadastro ainda está pendente de aprovação do administrador.")
+        if loja and loja.status == StatusAprovacaoLoja.REJEITADA:
+            raise TopDeckedException.forbidden(
+                "Seu cadastro foi rejeitado pelo administrador.")
 
     return db_user
 

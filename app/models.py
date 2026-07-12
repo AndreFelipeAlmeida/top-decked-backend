@@ -1,10 +1,10 @@
-from sqlmodel import Field, SQLModel, Relationship, Enum, Column, DateTime, UniqueConstraint
+from sqlmodel import Field, SQLModel, Relationship, Enum, Column, Date, DateTime, UniqueConstraint
 from typing import List, Optional
 import uuid
 from datetime import datetime
 from app.core.db import SessionDep
 from app.utils.datetimeUtil import data_agora_brasil, agora_brasil
-from app.utils.Enums import StatusTorneio, TCG, FormatoTorneio, FormatoMD, TipoTorneio, TipoMovimentacaoCredito, TipoMovimentacaoItem, CategoriaConquista
+from app.utils.Enums import StatusTorneio, StatusAprovacaoLoja, TCG, FormatoTorneio, FormatoMD, TipoTorneio, TipoParticipanteTorneio, MotivoPontuacaoExtra, TipoRegraPontuacaoEvento, TipoMovimentacaoCredito, TipoMovimentacaoItem, CategoriaConquista
 from email_validator import validate_email, EmailNotValidError
 from app.core.exception import TopDeckedException
 from sqlmodel import select
@@ -56,8 +56,13 @@ class Usuario(UsuarioBase, table=True):
 class JogadorBase(SQLModel):
     nome: str
     telefone: str = Field(default=None, max_length=11, nullable=True)
+    # Só a data (dia), sem hora nem timezone — era DateTime(timezone=True)
+    # antes, o mesmo bug de Torneio.data_planejada: o timestamp gravado num
+    # fuso podia virar outro dia ao ser lido/exibido em outro (idade e
+    # categoria calculadas errado perto da virada de mês/ano). Date elimina
+    # essa ambiguidade de vez.
     data_nascimento: date = Field(sa_column=Column(
-        DateTime(timezone=True), nullable=True, default=None))
+        Date, nullable=True, default=None))
 
 
 class Jogador(JogadorBase, table=True):
@@ -91,6 +96,11 @@ class JogadorCriado(SQLModel, table=True):
     tcg: TCG = Field(nullable=False, default=TCG.POKEMON)
     apelido: Optional[str] = Field(default=None)
     jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id")
+    # Preenchida só a partir de import de torneio (.tdf trazendo <birthdate>),
+    # e só na criação do JogadorCriado — se ele já existir, o valor atual é
+    # mantido (mesmo se for None), nunca sobrescrito por um import
+    # posterior. Ver docs/JOGADORES.md.
+    data_nascimento: Optional[date] = Field(default=None)
     jogador: Optional["Jogador"] | None = Relationship(back_populates="tcgs")
 
 
@@ -100,8 +110,23 @@ class JogadorTorneioLinkBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_criado_id: int = Field(
         foreign_key="jogadorcriado.id")
-    tipo_jogador_id: int | None = Field(
+    # Regra ADICIONAL (opcional) desta participação — não substitui a regra
+    # básica do torneio (Torneio.regra_basica_id), só soma/subtrai em cima
+    # dela: pt_vitoria/pt_derrota/pt_empate viram deltas aplicados à própria
+    # pontuação, e pt_oponente_ganha/pt_oponente_perde/pt_oponente_empate
+    # viram deltas aplicados a quem joga CONTRA este jogador. None (o normal)
+    # = usa só a regra básica, sem ajuste nenhum (ver TorneioService
+    # calcular_pontuacao_rodada e docs/REGRA_EXTRA.md).
+    regra_extra_id: int | None = Field(
         default=None, foreign_key="tipojogador.id")
+    # Papel do jogador NESTE torneio — ver TipoParticipanteTorneio. JUIZ é
+    # atribuído automaticamente ao dar Pontuação Extra com motivo "Juíz" pra
+    # alguém que ainda não estava no torneio (ver PontuacaoExtraService);
+    # exclui essa participação do pareamento de rodadas e do ranking/pódio
+    # deste torneio específico, sem afetar o ranking geral entre torneios
+    # (ver docs/PONTUACAO_EXTRA.md).
+    tipo: TipoParticipanteTorneio = Field(
+        default=TipoParticipanteTorneio.JOGADOR, nullable=False)
     pontuacao: float = Field(default=0)
     pontuacao_com_regras: float = Field(default=0)
     apelido: Optional[str] = Field(default=None)
@@ -123,11 +148,18 @@ class JogadorTorneioLinkBase(SQLModel):
 
 
 class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):
+    # Um jogador tem NO MÁXIMO uma linha por torneio — fonte única de
+    # verdade (ver TipoParticipanteTorneio.JOGADOR_E_JUIZ, o valor usado
+    # quando ele acumula os dois papéis, em vez de duas linhas separadas).
+    __table_args__ = (
+        UniqueConstraint("jogador_criado_id", "torneio_id",
+                          name="uix_jogador_torneio"),
+    )
     torneio_id: str | None = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
     torneio: Optional["Torneio"] | None = Relationship(
         back_populates="jogadores")
-    tipo_jogador: Optional["TipoJogador"] | None = Relationship()
+    regra_extra: Optional["TipoJogador"] | None = Relationship()
     composicao_representacao: Optional["RepresentacaoComposicao"] = Relationship()
     composicao_unidades: List["JogadorComposicaoUnidade"] = Relationship(
         back_populates="link",
@@ -172,6 +204,25 @@ class Loja(LojaBase, table=True):
     usuario_id: int = Field(foreign_key="usuario.id", unique=True)
     usuario: Usuario = Relationship(sa_relationship_kwargs={"lazy": "joined"})
     torneios: List["Torneio"] = Relationship(back_populates="loja")
+    # Status de aprovação nunca é aceito do cliente — por isso não mora em
+    # LojaBase (que alimenta LojaCriar/LojaAtualizar); só o Administrador
+    # muda isso.
+    status: StatusAprovacaoLoja = Field(
+        sa_column=Column(Enum(StatusAprovacaoLoja)), default=StatusAprovacaoLoja.PENDENTE)
+
+
+# ---------------------------------- Administrador ----------------------------------
+# Conta de governança global da plataforma — segue o mesmo padrão de
+# Jogador/Loja (perfil 1:1 ligado a um Usuario, que segura email/senha/
+# is_active/tipo).
+class AdministradorBase(SQLModel):
+    nome: str
+
+
+class Administrador(AdministradorBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuario.id", unique=True)
+    usuario: Usuario = Relationship(sa_relationship_kwargs={"lazy": "joined"})
 
 
 # ---------------------------------- Rodada ----------------------------------
@@ -234,6 +285,32 @@ class TipoJogador(TipoJogadorBase, table=True):
     loja_id: int | None = Field(default=None, foreign_key="loja.id")
 
 
+# ---------------------------------- Temporada ----------------------------------
+# Temporada de jogo Pokémon (TCG/VGC/GO) — intervalo de mês/ano (sem dia,
+# ex.: setembro/2026 a agosto/2027) definido pela loja/organizador, usado
+# pra calcular a categoria de idade (Junior/Senior/Master) de um jogador
+# dentro dessa temporada: a idade considerada é a que ele completa até o
+# ÚLTIMO DIA da temporada, não a idade no início dela (ver docs/TEMPORADAS.md
+# e CategoriaUtil.py). Escopada por loja (mesmo padrão de TipoJogador) — cada
+# loja pode ter suas próprias temporadas cadastradas, já que o app não tem um
+# conceito de configuração "global" fora dos catálogos compartilhados
+# (RepresentacaoComposicao/UnidadeCatalogo).
+
+
+class TemporadaBase(SQLModel):
+    tcg: TCG
+    nome: Optional[str] = Field(default=None)
+    ano_inicio: int
+    mes_inicio: int
+    ano_fim: int
+    mes_fim: int
+
+
+class Temporada(TemporadaBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    loja_id: int = Field(foreign_key="loja.id")
+
+
 # ---------------------------------- Torneio ----------------------------------
 
 
@@ -243,8 +320,13 @@ class TorneioBase(SQLModel):
     cidade: Optional[str] = Field(default=None, index=True, nullable=True)
     estado: Optional[str] = Field(default=None, index=True, nullable=True)
     tempo_por_rodada: int = Field(default=30, index=True)
+    # Só a data (dia), sem hora nem timezone — hora_planejada é um campo
+    # separado. Era DateTime(timezone=True) antes, o que causava o torneio
+    # "perder um dia" perto da virada de mês em fusos negativos (o
+    # timestamp gravado num fuso virava outro dia ao ser lido/exibido em
+    # outro); Date elimina essa ambiguidade de vez.
     data_planejada: date = Field(sa_column=Column(
-        DateTime(timezone=True), nullable=False), default=None)
+        Date, nullable=False), default=None)
     vagas: int = Field(default=0)
     hora_planejada: Optional[time] = Field(default=None, nullable=True)
     formato: Optional[FormatoTorneio] = Field(default=None, nullable=True)
@@ -274,6 +356,10 @@ class TorneioBase(SQLModel):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     fim_real: Optional[datetime] = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # Se este torneio deve contar pros pontos automáticos dos Eventos ativos
+    # no período dele. Default True — o organizador desmarca só pra casos
+    # pontuais (ex.: um torneio amistoso que não deveria valer pontuação).
+    conta_em_eventos: bool = Field(default=True, nullable=False)
 
 
 class Torneio(TorneioBase, table=True):
@@ -284,11 +370,152 @@ class Torneio(TorneioBase, table=True):
         back_populates="torneios", sa_relationship_kwargs={"lazy": "joined"})
     rodadas: List["Rodada"] = Relationship(
         sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    # order_by explícito: sem isso, a ordem de retorno de uma relação
+    # um-para-muitos não é garantida pelo banco e pode mudar sozinha a
+    # qualquer UPDATE na linha, fazendo o jogador "pular" de posição na
+    # listagem.
     jogadores: List["JogadorTorneioLink"] = Relationship(back_populates="torneio",
-                                                         sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+                                                         sa_relationship_kwargs={
+                                                             "cascade": "all, delete-orphan",
+                                                             "order_by": "JogadorTorneioLink.id",
+                                                         })
     status: StatusTorneio = Field(sa_column=Column(
         Enum(StatusTorneio)), default=StatusTorneio.ABERTO)
     regra_basica: Optional["TipoJogador"] = Relationship()
+
+
+# ---------------------------------- PontuacaoExtra ----------------------------------
+# Pontos avulsos dados a um jogador num torneio por um motivo fora do jogo em
+# si (trouxe um novato, atuou como juiz, etc.) — sempre somados em
+# JogadorTorneioLink.pontuacao_com_regras, nunca em pontuacao (a "crua", só
+# regra básica). Se o jogador ainda não tinha uma participação neste torneio,
+# uma é criada na hora (com tipo=JUIZ se o motivo for "Juíz" — ver
+# PontuacaoExtraService.criar_pontuacao_extra e docs/PONTUACAO_EXTRA.md).
+
+
+class PontuacaoExtraBase(SQLModel):
+    jogador_criado_id: int = Field(foreign_key="jogadorcriado.id")
+    motivo: MotivoPontuacaoExtra
+    descricao: Optional[str] = Field(default=None)
+    pontos: float
+
+
+class PontuacaoExtra(PontuacaoExtraBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    torneio_id: str = Field(foreign_key="torneio.id", ondelete="CASCADE")
+    criado_em: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+        default_factory=agora_brasil)
+    torneio: Optional["Torneio"] = Relationship()
+    jogador_criado: Optional["JogadorCriado"] = Relationship()
+
+
+# ---------------------------------- Evento ----------------------------------
+# Programa de pontuação de longo prazo, escopado por loja + jogo (ao contrário
+# de PontuacaoExtra, que é por torneio): jogadores são colocados num evento
+# pelo organizador/loja, acumulam pontos automaticamente (regras observando
+# os torneios FINALIZADO desse jogo/loja dentro do período do evento) ou
+# manualmente (PontosManualEvento, "Outros Motivos"), e desbloqueiam
+# recompensas ao atingir as metas (MetaEvento) cadastradas. Nada aqui é
+# armazenado como total — sempre recalculado na hora a partir de
+# JogadorTorneioLink + RegraPontuacaoEvento + PontosManualEvento (mesma
+# filosofia de nunca confiar num valor "congelado" já usada em
+# JogadorTorneioLink.pontuacao_com_regras — ver docs/EVENTOS.md).
+
+
+class EventoBase(SQLModel):
+    tcg: TCG
+    nome: str
+    descricao: Optional[str] = Field(default=None)
+    data_inicio: date
+    data_fim: date
+
+
+class Evento(EventoBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    loja_id: int = Field(foreign_key="loja.id")
+    loja: Optional["Loja"] = Relationship()
+    metas: List["MetaEvento"] = Relationship(
+        back_populates="evento", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    regras: List["RegraPontuacaoEvento"] = Relationship(
+        back_populates="evento", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    participantes: List["ParticipanteEvento"] = Relationship(
+        back_populates="evento", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    pontos_manuais: List["PontosManualEvento"] = Relationship(
+        back_populates="evento", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    regras_manuais: List["RegraPontuacaoManualEvento"] = Relationship(
+        back_populates="evento", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+
+
+class MetaEventoBase(SQLModel):
+    pontos_necessarios: int
+    # Recompensa é só informativa (um balão exibido na trilha de pontos do
+    # participante ao atingir a meta) — sem imagem cadastrada, mostra o
+    # texto da descrição no lugar (ver docs/EVENTOS.md).
+    recompensa_descricao: Optional[str] = Field(default=None)
+    recompensa_imagem_url: Optional[str] = Field(default=None)
+
+
+class MetaEvento(MetaEventoBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    evento_id: int = Field(foreign_key="evento.id", ondelete="CASCADE")
+    evento: Optional["Evento"] = Relationship(back_populates="metas")
+
+
+class RegraPontuacaoEventoBase(SQLModel):
+    tipo: TipoRegraPontuacaoEvento
+    pontos: float
+
+
+class RegraPontuacaoEvento(RegraPontuacaoEventoBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    evento_id: int = Field(foreign_key="evento.id", ondelete="CASCADE")
+    evento: Optional["Evento"] = Relationship(back_populates="regras")
+
+
+# Vitrine de regras de Pontuação Manual do evento: puramente informativo (o
+# jogador vê "como" pode ganhar pontos extras), sem nenhum efeito automático
+# na pontuação — quem lança os pontos de fato continua sendo o organizador,
+# via PontosManualEvento.
+class RegraPontuacaoManualEventoBase(SQLModel):
+    descricao: str
+    pontos: float
+
+
+class RegraPontuacaoManualEvento(RegraPontuacaoManualEventoBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    evento_id: int = Field(foreign_key="evento.id", ondelete="CASCADE")
+    evento: Optional["Evento"] = Relationship(back_populates="regras_manuais")
+
+
+class ParticipanteEventoBase(SQLModel):
+    jogador_criado_id: int = Field(foreign_key="jogadorcriado.id")
+
+
+class ParticipanteEvento(ParticipanteEventoBase, table=True):
+    __table_args__ = (
+        UniqueConstraint("evento_id", "jogador_criado_id", name="evento_id_jogador_criado_id_unique"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    evento_id: int = Field(foreign_key="evento.id", ondelete="CASCADE")
+    evento: Optional["Evento"] = Relationship(back_populates="participantes")
+    jogador_criado: Optional["JogadorCriado"] = Relationship()
+
+
+class PontosManualEventoBase(SQLModel):
+    jogador_criado_id: int = Field(foreign_key="jogadorcriado.id")
+    descricao: str
+    pontos: float
+
+
+class PontosManualEvento(PontosManualEventoBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    evento_id: int = Field(foreign_key="evento.id", ondelete="CASCADE")
+    criado_em: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+        default_factory=agora_brasil)
+    evento: Optional["Evento"] = Relationship(back_populates="pontos_manuais")
+    jogador_criado: Optional["JogadorCriado"] = Relationship()
 
 
 # ---------------------------------- Categoria de Item ----------------------------------

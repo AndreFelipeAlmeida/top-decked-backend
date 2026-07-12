@@ -27,6 +27,7 @@ class TorneioAtualizar(TorneioBase):
     regras_adicionais: Optional[Dict[str, int]] | None = None
     inicio_real: datetime | None = None
     fim_real: datetime | None = None
+    conta_em_eventos: bool | None = None
 
     # Campos de data/hora vêm de <input type="date/time/datetime-local">, que
     # mandam string vazia (não null) quando o usuário limpa o campo — e o
@@ -68,6 +69,7 @@ class CriarTorneioOrganizadorDTO(BaseModel):
     n_rodadas: int = 0
     regra_basica_id: Optional[int] = None
     pontuacao_de_participacao: int = 0
+    conta_em_eventos: bool = True
 
 
 class TorneioPublico(TorneioBase):

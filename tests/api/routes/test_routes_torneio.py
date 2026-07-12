@@ -7,17 +7,21 @@ funções de serviço isoladamente com objetos montados à mão — foi assim qu
 três bugs críticos passaram despercebidos apesar de validações manuais
 anteriores: `nova_rodada` confundindo Jogador.id com JogadorTorneioLink.id,
 `rodada.vencedor = <int>` quebrando com 500 em vez de setar `vencedor_id`, e
-`editar_torneio_regras` zerando o `tipo_jogador_id` de todo mundo sempre que
+`editar_torneio_regras` zerando a `regra_extra_id` de todo mundo sempre que
 `iniciar_torneio` é chamado sem re-passar a regra básica já configurada."""
 
 from fastapi.testclient import TestClient
+
+from app.core.db import get_session
 from sqlmodel import Session, select
 
 from app.models import (
+    Loja,
     Jogador,
     JogadorComposicaoUnidade,
     JogadorCriado,
     JogadorTorneioLink,
+    PontuacaoExtra,
     RepresentacaoComposicao,
     RepresentacaoComposicaoUnidade,
     Rodada,
@@ -26,7 +30,7 @@ from app.models import (
     Usuario,
 )
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.Enums import TCG
+from app.utils.Enums import TCG, StatusAprovacaoLoja
 
 
 def _login(client: TestClient, email: str, senha: str) -> str:
@@ -41,6 +45,12 @@ def _criar_loja_autenticada(client: TestClient, nome: str, email: str, senha: st
         json={"nome": nome, "endereco": "Rua X, 1", "email": email, "senha": senha},
     )
     assert r.status_code == 200, r.text
+    # Loja nasce PENDENTE -- aprova direto no banco pra manter este
+    # helper simples pros testes que nao sao sobre o fluxo de aprovacao.
+    session = client.app.dependency_overrides[get_session]()
+    loja_db = session.get(Loja, r.json()["id"])
+    loja_db.status = StatusAprovacaoLoja.APROVADA
+    session.commit()
     token = _login(client, email, senha)
     return r.json(), token
 
@@ -120,9 +130,12 @@ def _adicionar_participantes(session: Session, torneio_id: str, regra_id: int, n
         session.commit()
         session.refresh(jogador_criado)
 
+        # Sem regra extra por padrão (regra_id só serve pra criar o torneio
+        # com essa regra básica) — regra extra é sempre um ajuste OPCIONAL
+        # por cima da regra básica, não um valor padrão (ver TorneioService).
         link = JogadorTorneioLink(
             torneio_id=torneio_id, jogador_criado_id=jogador_criado.id, apelido=nome,
-            tipo_jogador_id=regra_id, pontuacao=0, pontuacao_com_regras=0,
+            pontuacao=0, pontuacao_com_regras=0,
         )
         session.add(link)
         session.commit()
@@ -159,6 +172,44 @@ def test_criar_torneio_com_formato_invalido_e_rejeitado(client: TestClient):
         headers=headers,
     )
     assert r.status_code == 422
+
+
+def test_finalizar_torneio_preenche_data_real_quando_ausente(client: TestClient):
+    """Um torneio finalizado nunca pode ficar sem inicio_real/fim_real —
+    são a base de toda validação de regra de negócio dali pra frente
+    (temporada, período de evento, ranking mensal). Quem finaliza sem tê-los
+    preenchido manualmente antes (ex.: torneio criado na plataforma, não
+    importado) ganha o timestamp de "agora" como aproximação."""
+    _, token = _criar_loja_autenticada(client, "Loja Finalizar Data Real", "loja.finalizardatareal@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    assert torneio["inicio_real"] is None
+    assert torneio["fim_real"] is None
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/finalizar", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["inicio_real"] is not None
+    assert r.json()["fim_real"] is not None
+
+
+def test_finalizar_torneio_preserva_data_real_ja_preenchida(client: TestClient):
+    _, token = _criar_loja_autenticada(client, "Loja Finalizar Data Preenchida", "loja.finalizardatapreenchida@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    r = client.put(
+        f"/api/lojas/torneios/{torneio['id']}",
+        json={"inicio_real": "2026-08-01T10:00:00", "fim_real": "2026-08-01T15:00:00"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/finalizar", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["inicio_real"].startswith("2026-08-01T10:00:00")
+    assert r.json()["fim_real"].startswith("2026-08-01T15:00:00")
 
 
 def test_pareamento_com_numero_impar_gera_bye_e_pontua_corretamente(client: TestClient, session: Session):
@@ -211,12 +262,106 @@ def test_pareamento_com_numero_impar_gera_bye_e_pontua_corretamente(client: Test
     perdedor = session.get(JogadorTorneioLink, perdedor_link_id)
     bye_jogador = session.get(JogadorTorneioLink, bye_link_id)
 
-    # pt_vitoria(3) + pt_oponente_ganha do perdedor(2) = 5
-    assert vencedor.pontuacao_com_regras == 5
-    # pt_derrota(0) + pt_oponente_perde do vencedor(-1) = -1
-    assert perdedor.pontuacao_com_regras == -1
+    # Nenhum participante tem regra extra — pontuacao_com_regras é só a
+    # regra básica (pt_oponente_ganha/perde só entram se alguém tiver uma
+    # regra extra, ver test_regra_extra_soma_delta_proprio_e_bonus_de_oponente).
+    assert vencedor.pontuacao_com_regras == 3  # pt_vitoria
+    assert perdedor.pontuacao_com_regras == 0  # pt_derrota
     # bye: só pt_vitoria(3), sem bônus de oponente (não existe oponente real)
     assert bye_jogador.pontuacao_com_regras == 3
+
+
+def test_regra_extra_soma_delta_proprio_e_bonus_de_oponente(client: TestClient, session: Session):
+    """Regra extra (JogadorTorneioLink.regra_extra_id) nunca substitui a
+    regra básica do torneio — só soma/subtrai por cima dela. Um jogador com
+    regra extra ganha o próprio delta de vitória/derrota/empate dela, E o
+    OPONENTE dele ganha o delta de oponente_ganha/oponente_perde/oponente_empate
+    dessa mesma regra extra (ver TorneioService.calcular_pontuacao_rodada).
+    Também confirma que limpar a regra extra (None, via PATCH .../regra) volta
+    o jogador a pontuar só pela regra básica, sem cair de volta pra ela como
+    "regra própria" (comportamento do modelo antigo, já removido)."""
+    _, token = _criar_loja_autenticada(client, "Loja Regra Extra", "loja.regraextra@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra_basica = _criar_regra(
+        client, headers, nome="Básica", pt_vitoria=3, pt_derrota=0, pt_empate=1,
+        pt_oponente_ganha=0, pt_oponente_perde=0, pt_oponente_empate=0,
+    )
+    torneio = _criar_torneio(client, headers, regra_basica["id"])
+    participantes = _adicionar_participantes(session, torneio["id"], regra_basica["id"], ["Vencedor", "Perdedor"])
+    link_por_nome = {p["nome"]: p["link_id"] for p in participantes}
+
+    regra_extra_vencedor = _criar_regra(
+        client, headers, nome="Extra Vencedor", pt_vitoria=10, pt_derrota=0, pt_empate=0,
+        pt_oponente_ganha=0, pt_oponente_perde=100, pt_oponente_empate=0,
+    )
+    regra_extra_perdedor = _criar_regra(
+        client, headers, nome="Extra Perdedor", pt_vitoria=0, pt_derrota=-5, pt_empate=0,
+        pt_oponente_ganha=50, pt_oponente_perde=0, pt_oponente_empate=0,
+    )
+
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/jogadores/{link_por_nome['Vencedor']}/regra",
+        json={"regra_extra_id": regra_extra_vencedor["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/jogadores/{link_por_nome['Perdedor']}/regra",
+        json={"regra_extra_id": regra_extra_perdedor["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    rodada_id = int(list(r.json().keys())[0])
+
+    r = client.put(
+        "/api/lojas/torneios/rodadas/finalizar",
+        json=[{"id_rodada": rodada_id, "id_vencedor": link_por_nome["Vencedor"]}],
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    vencedor_link = session.get(JogadorTorneioLink, link_por_nome["Vencedor"])
+    perdedor_link = session.get(JogadorTorneioLink, link_por_nome["Perdedor"])
+    # vencedor: base.pt_vitoria(3) + própria extra.pt_vitoria(10) + extra do perdedor.pt_oponente_ganha(50)
+    assert vencedor_link.pontuacao_com_regras == 63
+    # perdedor: base.pt_derrota(0) + própria extra.pt_derrota(-5) + extra do vencedor.pt_oponente_perde(100)
+    assert perdedor_link.pontuacao_com_regras == 95
+
+    # Remove a regra extra do vencedor — ele passa a pontuar só pela básica,
+    # o perdedor continua recebendo o bônus da SUA própria regra extra.
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/jogadores/{link_por_nome['Vencedor']}/regra",
+        json={"regra_extra_id": None},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    session.refresh(vencedor_link)
+    session.refresh(perdedor_link)
+    assert vencedor_link.pontuacao_com_regras == 53  # 3 (base) + 0 (sem extra) + 50 (extra do perdedor)
+    assert perdedor_link.pontuacao_com_regras == -5  # 0 (base) + -5 (própria extra) + 0 (vencedor sem extra)
+
+
+def test_atualizar_regra_extra_de_jogador_de_outra_loja_e_rejeitada(client: TestClient, session: Session):
+    _, token_dono = _criar_loja_autenticada(client, "Loja Dona Regra", "loja.dona.regraextra@gmail.com")
+    headers_dono = {"Authorization": f"Bearer {token_dono}"}
+    regra = _criar_regra(client, headers_dono)
+    torneio = _criar_torneio(client, headers_dono, regra["id"])
+    participante = _adicionar_participantes(session, torneio["id"], regra["id"], ["Alvo"])[0]
+
+    _, token_intruso = _criar_loja_autenticada(client, "Loja Intrusa Regra", "loja.intrusa.regraextra@gmail.com")
+    headers_intruso = {"Authorization": f"Bearer {token_intruso}"}
+    regra_intrusa = _criar_regra(client, headers_intruso, nome="Regra Intrusa")
+
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/jogadores/{participante['link_id']}/regra",
+        json={"regra_extra_id": regra_intrusa["id"]},
+        headers=headers_dono,
+    )
+    assert r.status_code == 404
 
 
 def test_finalizar_rodada_com_vencedor_invalido_e_rejeitado(client: TestClient, session: Session):
@@ -268,7 +413,35 @@ def test_recalcular_pontuacao_reaplica_regra_do_zero(client: TestClient, session
     assert r.status_code == 200, r.text
     jogadores = {j["jogador_id"]: j for j in r.json()["jogadores"]}
     vencedor_jogador_id = [k for k, v in jogador_id_para_link_id.items() if v == vencedor_link_id][0]
-    assert jogadores[vencedor_jogador_id]["pontuacao_com_regras"] == 5
+    assert jogadores[vencedor_jogador_id]["pontuacao_com_regras"] == 3
+
+
+def test_recalcular_pontuacao_aceita_pontuacao_de_participacao_ainda_nao_salva(client: TestClient, session: Session):
+    """Mesmo padrão da regra básica: o organizador não precisa clicar em
+    "Salvar Alterações" antes de recalcular com a pontuação de participação
+    que acabou de escolher no formulário — o valor enviado no recalcular já
+    vale (e fica salvo pro torneio, igual acontece com regra_basica_id)."""
+    _, token = _criar_loja_autenticada(client, "Loja Recalcular PP", "loja.recalcpp@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+
+    assert torneio["pontuacao_de_participacao"] == 0
+
+    r = client.post(
+        f"/api/lojas/torneios/{torneio['id']}/recalcular-pontuacao",
+        json={"regra_basica_id": regra["id"], "pontuacao_de_participacao": 10},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["pontuacao_de_participacao"] == 10
+    for jogador in r.json()["jogadores"]:
+        assert jogador["pontuacao_com_regras"] == 10
+
+    # E fica persistido — não é só um cálculo "de mentira" pra essa resposta.
+    r = client.get(f"/api/lojas/torneios/{torneio['id']}", headers=headers)
+    assert r.json()["pontuacao_de_participacao"] == 10
 
 
 def test_torneio_melhor_de_default_e_md1_e_pode_ser_configurado(client: TestClient):
@@ -355,8 +528,8 @@ def test_editar_rodada_atualiza_vencedor_e_pontuacao_sem_dobrar_ao_reeditar(clie
 
     vencedor_link = session.get(JogadorTorneioLink, vencedor_link_id)
     perdedor_link = session.get(JogadorTorneioLink, perdedor_link_id)
-    assert vencedor_link.pontuacao_com_regras == 5  # pt_vitoria(3) + pt_oponente_ganha(2)
-    assert perdedor_link.pontuacao_com_regras == -1  # pt_derrota(0) + pt_oponente_perde(-1)
+    assert vencedor_link.pontuacao_com_regras == 3  # pt_vitoria, sem regra extra
+    assert perdedor_link.pontuacao_com_regras == 0  # pt_derrota, sem regra extra
 
     rodada = session.get(Rodada, rodada_id)
     assert rodada.vencedor_id == vencedor_link_id
@@ -541,9 +714,9 @@ def test_atualizar_composicao_pela_segunda_vez_nao_quebra_com_instancia_deletada
 def test_deletar_torneio_remove_torneio_e_todas_as_dependencias(client: TestClient, session: Session):
     """DELETE /lojas/torneios/{id} precisa apagar o torneio inteiro e tudo
     que depende dele — sem isso sobrariam linhas órfãs (JogadorTorneioLink,
-    Rodada, JogadorComposicaoUnidade), já que o projeto não usa migrations
-    nem tem PRAGMA foreign_keys habilitado no SQLite (nenhum ondelete=CASCADE
-    declarado nas colunas é de fato aplicado pelo banco)."""
+    Rodada, JogadorComposicaoUnidade, PontuacaoExtra), já que o projeto não
+    usa migrations nem tem PRAGMA foreign_keys habilitado no SQLite (nenhum
+    ondelete=CASCADE declarado nas colunas é de fato aplicado pelo banco)."""
     _, token = _criar_loja_autenticada(client, "Loja Deletar Torneio", "loja.deletartorneio@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)
@@ -567,6 +740,20 @@ def test_deletar_torneio_remove_torneio_e_todas_as_dependencias(client: TestClie
     assert r.status_code == 200, r.text
     rodada_id = int(list(r.json().keys())[0])
 
+    jogador_criado_id = session.get(JogadorTorneioLink, participantes[0]["link_id"]).jogador_criado_id
+    r = client.post(
+        f"/api/lojas/torneios/{torneio['id']}/pontuacao-extra",
+        json={
+            "jogador_criado_id": jogador_criado_id,
+            "motivo": "OUTROS",
+            "descricao": "Ajudou na organização",
+            "pontos": 2,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    pontuacao_extra_id = r.json()["id"]
+
     r = client.delete(f"/api/lojas/torneios/{torneio['id']}", headers=headers)
     assert r.status_code == 204, r.text
 
@@ -577,6 +764,7 @@ def test_deletar_torneio_remove_torneio_e_todas_as_dependencias(client: TestClie
     assert session.exec(
         select(JogadorComposicaoUnidade).where(JogadorComposicaoUnidade.unidade_catalogo_id == unidade.id)
     ).first() is None
+    assert session.get(PontuacaoExtra, pontuacao_extra_id) is None
 
 
 def test_deletar_torneio_inexistente_e_rejeitado(client: TestClient):

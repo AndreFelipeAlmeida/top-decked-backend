@@ -52,3 +52,10 @@ async def retornar_jogador_atual(token_data: Annotated[str, Depends(retornar_usu
         raise TopDeckedException.forbidden()
 
     return token_data
+
+
+async def retornar_admin_atual(token_data: Annotated[str, Depends(retornar_usuario_atual)]) -> TokenData:
+    if not token_data.tipo == "admin":
+        raise TopDeckedException.forbidden()
+
+    return token_data

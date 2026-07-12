@@ -1,11 +1,17 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from jose import jwt
 from fastapi import Request
 from datetime import datetime, timedelta, timezone
+
+import resend
+
 from app.core.config import settings
 from app.models import Usuario
-from app.core.security import fastmail
-from fastapi_mail import MessageSchema
 
+
+resend.api_key = settings.RESEND_API_KEY
 
 SECRET_KEY = settings.SECURITY_SECRET_KEY
 ALGORITHM = settings.SECURITY_ALGORITHM
@@ -13,14 +19,17 @@ ALGORITHM = settings.SECURITY_ALGORITHM
 
 def criar_token_confirmacao(email: str):
     expiracao = datetime.now(timezone.utc) + timedelta(hours=24)
-    token = jwt.encode({"sub": email, "exp": expiracao},
-                       SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode(
+        {"sub": email, "exp": expiracao},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
     return token
 
 
 async def processar_ativacao_usuario(
     usuario: Usuario,
-    request: Request
+    request: Request,
 ):
     if settings.DEBUG:
         usuario.is_active = True
@@ -29,22 +38,22 @@ async def processar_ativacao_usuario(
     token = criar_token_confirmacao(usuario.email)
     link = f"{request.base_url}api/login/confirmar-email?token={token}"
 
-    mensagem = MessageSchema(
-        subject="Confirme seu email",
-        recipients=[usuario.email],
-        body=(
-            "Olá!\n\n"
-            "Obrigado por se cadastrar na TopDecked.\n"
-            "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
-            f"{link}\n\n"
-            "Se você não criou uma conta, ignore esta mensagem.\n\n"
-            "Atenciosamente,\n"
-            "Equipe TopDecked"
-        ),
-        subtype="plain"
+    resend.Emails.send(
+        {
+            "from": f"{settings.MAIL_FROM_NAME} <{settings.MAIL_FROM}>",
+            "to": [usuario.email],
+            "subject": "Confirme seu e-mail",
+            "text": (
+                "Olá!\n\n"
+                "Obrigado por se cadastrar na Brickei.\n"
+                "Para ativar sua conta, confirme seu e-mail clicando no link abaixo:\n\n"
+                f"{link}\n\n"
+                "Se você não criou uma conta, ignore esta mensagem.\n\n"
+                "Atenciosamente,\n"
+                "Equipe Brickei"
+            ),
+        }
     )
-
-    await fastmail.send_message(mensagem)
 
 
 # "tipo" no payload separa esse token do de confirmação de e-mail acima —
@@ -59,7 +68,11 @@ TIPO_TOKEN_REDEFINICAO_SENHA = "redefinir_senha"
 def criar_token_redefinicao_senha(email: str) -> str:
     expiracao = datetime.now(timezone.utc) + timedelta(hours=1)
     token = jwt.encode(
-        {"sub": email, "tipo": TIPO_TOKEN_REDEFINICAO_SENHA, "exp": expiracao},
+        {
+            "sub": email,
+            "tipo": TIPO_TOKEN_REDEFINICAO_SENHA,
+            "exp": expiracao,
+        },
         SECRET_KEY,
         algorithm=ALGORITHM,
     )
@@ -71,24 +84,22 @@ async def processar_esqueci_senha(usuario: Usuario) -> None:
     link = f"{settings.FRONTEND_URL}/redefinir-senha?token={token}"
 
     if settings.DEBUG:
-        # Sem isso, testar o fluxo em dev exigiria uma caixa de entrada real
-        # pra cada tentativa — o link aparece no console do servidor.
         print(f"[DEBUG] Link de redefinição de senha para {usuario.email}: {link}")
         return
 
-    mensagem = MessageSchema(
-        subject="Redefinição de senha",
-        recipients=[usuario.email],
-        body=(
-            "Olá!\n\n"
-            "Recebemos uma solicitação para redefinir a senha da sua conta na Brickei.\n"
-            "Clique no link abaixo para escolher uma nova senha (válido por 1 hora):\n\n"
-            f"{link}\n\n"
-            "Se você não solicitou isso, ignore este e-mail — sua senha continua a mesma.\n\n"
-            "Atenciosamente,\n"
-            "Equipe Brickei"
-        ),
-        subtype="plain",
+    resend.Emails.send(
+        {
+            "from": f"{settings.MAIL_FROM_NAME} <{settings.MAIL_FROM}>",
+            "to": [usuario.email],
+            "subject": "Redefinição de senha",
+            "text": (
+                "Olá!\n\n"
+                "Recebemos uma solicitação para redefinir a senha da sua conta na Brickei.\n"
+                "Clique no link abaixo para escolher uma nova senha (válido por 1 hora):\n\n"
+                f"{link}\n\n"
+                "Se você não solicitou isso, ignore este e-mail — sua senha continua a mesma.\n\n"
+                "Atenciosamente,\n"
+                "Equipe Brickei"
+            ),
+        }
     )
-
-    await fastmail.send_message(mensagem)

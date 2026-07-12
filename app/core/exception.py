@@ -27,3 +27,9 @@ class TopDeckedException:
         return HTTPException(
             status_code=404,
             detail=message)
+
+    @staticmethod
+    def conflict(message: str):
+        return HTTPException(
+            status_code=409,
+            detail=message)

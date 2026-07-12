@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, Depends, Body
 from sqlmodel import text
 from typing import Annotated
-from app.services.TorneioService import retornar_torneio_completo, retornar_link_completo, editar_torneio_regras, calcular_pontuacao, calcular_pontuacao_rodada, get_torneio_top, verificar_permissao_gerenciar_torneio
+from app.services.TorneioService import retornar_torneio_completo, retornar_link_completo, editar_torneio_regras, regras_extras_atuais, calcular_pontuacao, calcular_pontuacao_rodada, get_torneio_top, verificar_permissao_gerenciar_torneio, adicionar_juiz, remover_juiz, salvar_link_ou_conflito
 from app.services.ImportacaoService import importar_torneio
 from app.services.RodadaService import nova_rodada
 from app.services.ConquistaService import recalcular_conquistas_jogador
@@ -10,12 +10,21 @@ from app.services.ComposicaoService import (
     JOGOS_COM_COMPOSICAO_POR_PARTIDA,
     retornar_composicao_partida_completa,
 )
+from app.services.PontuacaoExtraService import (
+    criar_pontuacao_extra,
+    retornar_pontuacao_extra_completa,
+    listar_jogadores_disponiveis,
+    listar_organizadores_disponiveis_para_juiz,
+)
 from app.schemas.Torneio import TorneioPublico, TorneioAtualizar, CriarTorneioOrganizadorDTO
-from app.schemas.JogadorTorneioLink import JogadorTorneioLinkPublico, PontuacaoManualDTO, RegraJogadorDTO
+from app.schemas.JogadorTorneioLink import JogadorTorneioLinkPublico, PontuacaoManualDTO, RegraJogadorDTO, AdicionarJuizDTO
 from app.schemas.Composicao import JogadorComposicaoDTO, ComposicaoPartidaPublico, ComposicaoPartidaAtualizarDTO
 from app.schemas.Rodada import RodadaResultadoDTO, RodadaEditarDTO
-from app.models import TipoJogador, Loja, LojaJogadorLink, LojaJogadorOrganizadorTCG, Torneio, TorneioBase, JogadorTorneioLink, Jogador, StatusTorneio, Rodada, JogadorCriado, RepresentacaoComposicao, UnidadeCatalogo, JogadorComposicaoUnidade, RodadaComposicao, ComposicaoPartidaUnidade
-from app.utils.Enums import TCG
+from app.schemas.PontuacaoExtra import PontuacaoExtraCriarDTO, PontuacaoExtraPublico
+from app.schemas.JogadorCriado import JogadorCriadoPublico
+from app.models import TipoJogador, Loja, LojaJogadorLink, LojaJogadorOrganizadorTCG, Torneio, TorneioBase, JogadorTorneioLink, Jogador, StatusTorneio, Rodada, JogadorCriado, PontuacaoExtra, RepresentacaoComposicao, UnidadeCatalogo, JogadorComposicaoUnidade, RodadaComposicao, ComposicaoPartidaUnidade
+from app.utils.Enums import TCG, MotivoPontuacaoExtra, TipoParticipanteTorneio
+from app.utils.datetimeUtil import agora_brasil
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
@@ -290,9 +299,15 @@ def iniciar_torneio(session: SessionDep, torneio_id: str,
     if pontuacao_de_participacao:
         torneio.pontuacao_de_participacao = pontuacao_de_participacao
 
-    torneio = editar_torneio_regras(session, torneio,
-                                    regra_basica_id,
-                                    regras_adicionais)
+    # Preserva as regras extras já atribuídas quando quem chama (ex.: o botão
+    # "Iniciar Torneio", que normalmente não reenvia isso) não está de fato
+    # mexendo nelas — sem isso, iniciar o torneio apagaria a regra extra de
+    # todo mundo (mesma classe de bug do item 53 de docs/DIVIDA_TECNICA.md).
+    torneio = editar_torneio_regras(
+        session, torneio,
+        regra_basica_id,
+        regras_adicionais if regras_adicionais is not None else regras_extras_atuais(torneio),
+    )
 
     torneio.status = StatusTorneio.EM_ANDAMENTO
     session.add(torneio)
@@ -313,6 +328,15 @@ def finalizar_torneio(session: SessionDep, torneio_id: str, loja: Annotated[Toke
         raise TopDeckedException.forbidden()
 
     torneio.status = StatusTorneio.FINALIZADO
+    # A partir daqui, toda regra de negócio (temporada, período de evento,
+    # ranking mensal) passa a usar a data/hora real, nunca mais a planejada
+    # — então um torneio finalizado nunca pode ficar sem elas (ver
+    # TorneioDataUtil.momento_efetivo_torneio). Import (.tdf) e edição
+    # manual já podem tê-las preenchido antes; se não, usa agora.
+    if not torneio.inicio_real:
+        torneio.inicio_real = agora_brasil()
+    if not torneio.fim_real:
+        torneio.fim_real = agora_brasil()
     session.add(torneio)
     session.commit()
     session.refresh(torneio)
@@ -327,6 +351,16 @@ def finalizar_torneio(session: SessionDep, torneio_id: str, loja: Annotated[Toke
     for jogador_id in jogadores_ids:
         recalcular_conquistas_jogador(session, jogador_id)
 
+    # recalcular_conquistas_jogador faz seus próprios commits — com
+    # expire_on_commit (padrão da Session, ver app/core/db.py), isso expira
+    # os atributos escalares já carregados de `torneio` (id, status, etc.).
+    # `torneio.model_dump()` (dentro de retornar_torneio_completo) lê esses
+    # atributos sem passar pelo mecanismo de lazy-reload do SQLAlchemy, então
+    # sem este refresh a resposta saía sem `id`/`status`/etc. — um
+    # ResponseValidationError sempre que este endpoint fosse chamado com
+    # pelo menos um jogador com conta vinculada (nenhum teste cobria esse
+    # caminho até agora).
+    session.refresh(torneio)
     torneio_completo = retornar_torneio_completo(session, torneio)
     return torneio_completo
 
@@ -420,15 +454,11 @@ def editar_rodada(session: SessionDep,
 
     # calcular_pontuacao_rodada soma pontuação incrementalmente — chamar de
     # novo sem resetar dobraria os pontos. Recalcula tudo do zero (mesmo
-    # mecanismo de recalcular_pontuacao_torneio), preservando regras
-    # específicas por jogador já atribuídas.
+    # mecanismo de recalcular_pontuacao_torneio), preservando regras extras
+    # já atribuídas por jogador.
     if torneio.regra_basica_id:
-        regras_adicionais = {
-            str(jt.id): jt.tipo_jogador_id
-            for jt in torneio.jogadores
-            if jt.tipo_jogador_id is not None
-        }
-        torneio = editar_torneio_regras(session, torneio, torneio.regra_basica_id, regras_adicionais)
+        torneio = editar_torneio_regras(
+            session, torneio, torneio.regra_basica_id, regras_extras_atuais(torneio))
         session.add(torneio)
         calcular_pontuacao(session, torneio)
 
@@ -456,9 +486,18 @@ def editar_torneio(session: SessionDep,
     session.add(torneio)
 
     if torneio_atualizar.regra_basica_id or torneio_atualizar.regras_adicionais:
-        torneio = editar_torneio_regras(session, torneio,
-                                        torneio_atualizar.regra_basica_id,
-                                        torneio_atualizar.regras_adicionais)
+        # Idem iniciar_torneio: "Salvar Alterações" na tela de edição envia
+        # regra_basica_id sempre que o torneio já tem uma, mas não reenvia
+        # regras_adicionais (a tela edita isso por jogador, num select à
+        # parte) — sem preservar o que já existe, salvar qualquer campo do
+        # torneio apagaria a regra extra de todo mundo.
+        torneio = editar_torneio_regras(
+            session, torneio,
+            torneio_atualizar.regra_basica_id,
+            torneio_atualizar.regras_adicionais
+            if torneio_atualizar.regras_adicionais is not None
+            else regras_extras_atuais(torneio),
+        )
 
         session.add(torneio)
         calcular_pontuacao(session, torneio)
@@ -510,30 +549,33 @@ def atualizar_regra_jogador(session: SessionDep,
 
     if not torneio.regra_basica_id:
         raise TopDeckedException.bad_request(
-            "Defina a regra básica do torneio antes de atribuir uma regra específica a um jogador")
+            "Defina a regra básica do torneio antes de atribuir uma regra extra a um jogador")
 
     link = session.get(JogadorTorneioLink, link_id)
     if not link or link.torneio_id != torneio_id:
         raise TopDeckedException.not_found(
             "Inscrição não encontrada neste torneio")
 
-    tipo_jogador_id = dados.tipo_jogador_id or torneio.regra_basica_id
+    # None = remove a regra extra deste jogador (ele passa a pontuar só pela
+    # regra básica) — diferente do modelo antigo, não cai de volta pra
+    # regra_basica_id: regra extra é sempre um ajuste opcional, nunca um
+    # valor obrigatório (ver JogadorTorneioLinkBase.regra_extra_id).
+    regra_extra_id = dados.regra_extra_id
 
-    regra = session.get(TipoJogador, tipo_jogador_id)
-    if not regra or regra.loja_id != torneio.loja_id:
-        raise TopDeckedException.not_found(
-            "Regra de pontuação não encontrada para esta loja")
+    if regra_extra_id is not None:
+        regra = session.get(TipoJogador, regra_extra_id)
+        if not regra or regra.loja_id != torneio.loja_id:
+            raise TopDeckedException.not_found(
+                "Regra de pontuação não encontrada para esta loja")
 
-    # Preserva a regra específica que os outros jogadores já tinham (se
-    # alguma) — editar_torneio_regras reatribuiria todo mundo pra regra
-    # básica se regras_adicionais não cobrisse todo mundo, e só queremos
-    # trocar a regra deste jogador.
-    regras_adicionais = {
-        str(jt.id): jt.tipo_jogador_id
-        for jt in torneio.jogadores
-        if jt.tipo_jogador_id is not None
-    }
-    regras_adicionais[str(link_id)] = tipo_jogador_id
+    # Preserva a regra extra que os outros jogadores já tinham (se alguma) —
+    # editar_torneio_regras zeraria a regra extra de todo mundo que não
+    # estiver em regras_adicionais, e só queremos trocar a deste jogador.
+    regras_adicionais = regras_extras_atuais(torneio)
+    if regra_extra_id is not None:
+        regras_adicionais[str(link_id)] = regra_extra_id
+    else:
+        regras_adicionais.pop(str(link_id), None)
 
     torneio = editar_torneio_regras(session, torneio, torneio.regra_basica_id, regras_adicionais)
     session.add(torneio)
@@ -542,6 +584,108 @@ def atualizar_regra_jogador(session: SessionDep,
     session.refresh(torneio)
 
     return retornar_torneio_completo(session, torneio)
+
+
+@router.get("/{torneio_id}/organizadores-disponiveis-juiz", response_model=list[JogadorCriadoPublico])
+def get_organizadores_disponiveis_juiz(
+    session: SessionDep,
+    torneio_id: str,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    return listar_organizadores_disponiveis_para_juiz(session, torneio)
+
+
+@router.post("/{torneio_id}/juizes", response_model=JogadorTorneioLinkPublico)
+def adicionar_juiz_torneio(
+    session: SessionDep,
+    torneio_id: str,
+    dados: AdicionarJuizDTO,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    link = adicionar_juiz(session, torneio, dados.jogador_criado_id)
+    return retornar_link_completo(session, torneio, link)
+
+
+@router.delete("/{torneio_id}/juizes/{link_id}")
+def remover_juiz_torneio(
+    session: SessionDep,
+    torneio_id: str,
+    link_id: int,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    remover_juiz(session, torneio, link_id)
+    return {"ok": True}
+
+
+@router.get("/{torneio_id}/jogadores-disponiveis", response_model=list[JogadorCriadoPublico])
+def get_jogadores_disponiveis_pontuacao_extra(
+    session: SessionDep,
+    torneio_id: str,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+    motivo: MotivoPontuacaoExtra | None = None,
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    return listar_jogadores_disponiveis(session, torneio, motivo)
+
+
+@router.post("/{torneio_id}/pontuacao-extra", response_model=PontuacaoExtraPublico)
+def criar_pontuacao_extra_torneio(
+    session: SessionDep,
+    torneio_id: str,
+    dados: PontuacaoExtraCriarDTO,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    pontuacao_extra = criar_pontuacao_extra(session, torneio, dados)
+    return retornar_pontuacao_extra_completa(pontuacao_extra)
+
+
+@router.get("/{torneio_id}/pontuacao-extra", response_model=list[PontuacaoExtraPublico])
+def get_pontuacao_extra_torneio(
+    session: SessionDep,
+    torneio_id: str,
+    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
+):
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    resultados = session.exec(
+        select(PontuacaoExtra)
+        .where(PontuacaoExtra.torneio_id == torneio_id)
+        .order_by(PontuacaoExtra.criado_em.desc())
+    ).all()
+    return [retornar_pontuacao_extra_completa(pe) for pe in resultados]
 
 
 @router.patch("/{torneio_id}/jogadores/{link_id}/composicao", response_model=JogadorTorneioLinkPublico)
@@ -723,7 +867,8 @@ def atualizar_composicao_partida(session: SessionDep,
 def recalcular_pontuacao_torneio(session: SessionDep,
                                  torneio_id: str,
                                  usuario: Annotated[TokenData, Depends(retornar_usuario_atual)],
-                                 regra_basica_id: int | None = Body(default=None, embed=True)):
+                                 regra_basica_id: int | None = Body(default=None, embed=True),
+                                 pontuacao_de_participacao: int | None = Body(default=None, embed=True)):
     torneio = session.get(Torneio, torneio_id)
 
     if not torneio:
@@ -731,9 +876,10 @@ def recalcular_pontuacao_torneio(session: SessionDep,
 
     verificar_permissao_gerenciar_torneio(session, torneio, usuario)
 
-    # Aceita a regra selecionada no formulário mesmo que ainda não tenha sido
-    # salva (o organizador não deveria precisar clicar em "Salvar Alterações"
-    # antes de conseguir recalcular com a regra que acabou de escolher).
+    # Aceita a regra e a pontuação de participação selecionadas no formulário
+    # mesmo que ainda não tenham sido salvas (o organizador não deveria
+    # precisar clicar em "Salvar Alterações" antes de conseguir recalcular
+    # com o que acabou de escolher).
     regra_a_usar = regra_basica_id or torneio.regra_basica_id
 
     if not regra_a_usar:
@@ -745,10 +891,13 @@ def recalcular_pontuacao_torneio(session: SessionDep,
         raise TopDeckedException.not_found(
             "Regra de pontuação não encontrada para esta loja")
 
-    # Reaplica a regra escolhida (zera pontuacao/pontuacao_com_regras e reatribui
-    # tipo_jogador_id de cada participante) e recalcula a partir das rodadas. Não
-    # preserva regras adicionais (por-jogador) que tenham sido atribuídas antes —
-    # a tela de edição atual não expõe esse ajuste fino.
+    if pontuacao_de_participacao is not None:
+        torneio.pontuacao_de_participacao = pontuacao_de_participacao
+
+    # Reaplica a regra escolhida (zera pontuacao/pontuacao_com_regras e limpa
+    # a regra extra de cada participante) e recalcula a partir das rodadas.
+    # Não preserva regras extras (por-jogador) que tenham sido atribuídas
+    # antes — o botão "Recalcular" é um reset explícito pra regra básica.
     torneio = editar_torneio_regras(session, torneio, regra_a_usar, None)
     torneio.regra_basica_id = regra_a_usar
     session.add(torneio)
@@ -771,8 +920,10 @@ def deletar_torneio(session: SessionDep,
     Torneio pra cascatear automaticamente. Por isso o delete é manual e
     explícito, filho antes de pai: composição por partida (Pokémon GO) →
     RodadaComposicao → composição completa do jogador → Rodada →
-    JogadorTorneioLink → Torneio. Não mexe em conquistas/JogadorCriado/histórico
-    financeiro — isso pertence ao jogador, não ao torneio."""
+    JogadorTorneioLink → Torneio, mais Pontuação Extra do torneio (não
+    depende de mais nada, pode sair a qualquer momento antes do Torneio).
+    Não mexe em conquistas/JogadorCriado/histórico financeiro — isso
+    pertence ao jogador, não ao torneio."""
     torneio = session.get(Torneio, torneio_id)
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
@@ -806,6 +957,7 @@ def deletar_torneio(session: SessionDep,
     )
     session.exec(text("DELETE FROM rodada WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
     session.exec(text("DELETE FROM jogadortorneiolink WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
+    session.exec(text("DELETE FROM pontuacaoextra WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
     session.exec(text("DELETE FROM torneio WHERE id = :torneio_id").bindparams(torneio_id=torneio_id))
     session.commit()
 
@@ -853,17 +1005,29 @@ def inscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annotate
     link = session.exec(select(JogadorTorneioLink)
                         .where((JogadorTorneioLink.jogador_criado_id == jogador_criado.id) &
                                 (JogadorTorneioLink.torneio_id == torneio.id))).first()
-    if link:
-        raise TopDeckedException.bad_request("Inscrição já realizada")
 
+    # Um jogador só tem UMA linha por torneio (fonte única de verdade). Se
+    # ele já é Juiz aqui (ver TorneioService.adicionar_juiz), inscrever-se
+    # é um upsert — vira JOGADOR_E_JUIZ em vez de criar uma segunda linha.
+    if link:
+        if link.tipo in (TipoParticipanteTorneio.JOGADOR, TipoParticipanteTorneio.JOGADOR_E_JUIZ):
+            raise TopDeckedException.bad_request("Inscrição já realizada")
+        link.tipo = TipoParticipanteTorneio.JOGADOR_E_JUIZ
+        session.add(link)
+        session.commit()
+        session.refresh(link)
+        return retornar_link_completo(session, torneio, link)
+
+    # Sem regra extra na inscrição — a regra básica do torneio já se aplica
+    # sozinha a todo mundo (ver JogadorTorneioLinkBase.regra_extra_id).
     inscricao = JogadorTorneioLink(
         jogador_criado_id=jogador_criado.id,
         apelido=jogador.nome,
         torneio_id=torneio.id,
-        tipo_jogador_id=torneio.regra_basica_id if torneio.regra_basica_id else None,
+        tipo=TipoParticipanteTorneio.JOGADOR,
     )
 
-    session.add(inscricao)
+    salvar_link_ou_conflito(session, inscricao, "Inscrição já realizada")
     session.commit()
     session.refresh(inscricao)
 
@@ -889,8 +1053,16 @@ def desinscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annot
         )
     ).first()
 
-    if not inscricao:
+    if not inscricao or inscricao.tipo not in (TipoParticipanteTorneio.JOGADOR, TipoParticipanteTorneio.JOGADOR_E_JUIZ):
         raise TopDeckedException.not_found("Inscrição não encontrada")
+
+    # Downgrade, não delete, se ele também é Juiz aqui — só sai o papel de
+    # Jogador (mesma regra de TorneioService.remover_juiz, espelhada).
+    if inscricao.tipo == TipoParticipanteTorneio.JOGADOR_E_JUIZ:
+        inscricao.tipo = TipoParticipanteTorneio.JUIZ
+        session.add(inscricao)
+        session.commit()
+        return
 
     session.delete(inscricao)
     session.commit()

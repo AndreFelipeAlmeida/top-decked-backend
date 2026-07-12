@@ -67,6 +67,28 @@ def test_atualizar_jogador_autenticado(client: TestClient) -> None:
     assert r.json()["nome"] == "Ana Atualizada"
 
 
+def test_data_nascimento_nao_perde_um_dia_ao_salvar(client: TestClient) -> None:
+    """Regressão: Jogador.data_nascimento já foi DateTime(timezone=True) —
+    o mesmo bug de Torneio.data_planejada, que podia gravar/ler o dia
+    errado dependendo do fuso. Salvar 01/01 (a data mais sensível a esse
+    tipo de deslocamento) precisa continuar sendo 01/01 na leitura."""
+    _criar_jogador(client, "Nascimento Exato", "nascimentoexato@gmail.com", "senha123")
+    token = _login(client, "nascimentoexato@gmail.com", "senha123")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"nome": "Nascimento Exato", "data_nascimento": "2010-01-01", "tcgs": None},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data_nascimento"] == "2010-01-01"
+
+    r = client.get("/api/jogadores/me", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["data_nascimento"] == "2010-01-01"
+
+
 def test_atualizar_jogador_sem_autenticacao_e_negado(client: TestClient) -> None:
     r = client.put("/api/jogadores/", json={"nome": "Sem Auth"})
     assert r.status_code == 401

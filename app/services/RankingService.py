@@ -3,6 +3,7 @@ from app.schemas.Ranking import Ranking, RankingPorLoja, RankingPorFormato
 from sqlmodel import select, extract
 from app.models import Jogador, JogadorCriado, JogadorTorneioLink, Rodada, Loja, Torneio
 from app.utils.Enums import StatusTorneio, TCG
+from app.utils.TorneioDataUtil import data_efetiva_torneio
 from collections import defaultdict
 
 
@@ -102,11 +103,12 @@ def calcula_ranking_geral_por_loja(session: SessionDep, mes: int = None):
                 ))
             )
 
-            if mes is not None:
-                links = (links.join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
-                         .where(extract("month", Torneio.data_planejada) == mes))
-
             links = session.exec(links).all()
+            # Filtro por mês em Python (não em SQL): pra torneios FINALIZADOS
+            # o mês que vale é o da data efetiva (real), não a planejada —
+            # ver TorneioDataUtil.data_efetiva_torneio.
+            if mes is not None:
+                links = [link for link in links if data_efetiva_torneio(link.torneio).month == mes]
             if not links:
                 continue
             total_pontos = 0

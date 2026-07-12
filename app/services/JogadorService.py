@@ -8,11 +8,12 @@ from app.utils.Enums import MesEnum, TCG
 from app.services.RankingService import calcula_ranking_geral, calcular_taxa_vitoria
 from app.utils.datetimeUtil import data_agora_brasil
 from app.utils.Enums import StatusTorneio, TipoTorneio
+from app.utils.TorneioDataUtil import data_efetiva_torneio
 from app.schemas.GameID import GameIDPublico
 from app.core.exception import TopDeckedException
 
 
-def posicao_do_jogador(ranking: list, jogador_id: str):
+def posicao_do_jogador(ranking: list, jogador_id: int):
     for index, r in enumerate(ranking, start=1):
         if r.jogador_id == jogador_id:
             return index
@@ -21,6 +22,9 @@ def posicao_do_jogador(ranking: list, jogador_id: str):
 
 def calcular_estatisticas(session: SessionDep, jogador: Jogador):
     estat_por_mes = _retornar_estatisticas_mensais(session, jogador.id)
+    # Um jogador só tem UMA linha de JogadorTorneioLink por torneio (fonte
+    # única de verdade — ver TipoParticipanteTorneio.JOGADOR_E_JUIZ), então
+    # essa contagem já não precisa de deduplicação nenhuma.
     torneios_links = session.exec(select(JogadorTorneioLink)
                                   .join(Torneio)
                                   .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
@@ -57,7 +61,9 @@ def _retornar_estatisticas_torneio(session: SessionDep, jogador: Jogador,
         estatisticas.append({
             "id": link.torneio_id,
             "nome": link.torneio.nome,
-            "data_planejada": link.torneio.data_planejada,
+            # Estes torneios já são todos FINALIZADO (filtrado pelo chamador)
+            # — a data real vale, não a planejada (ver TorneioDataUtil).
+            "data_planejada": data_efetiva_torneio(link.torneio),
             "colocacao": colocacao,
             "participantes": len(link.torneio.jogadores),
             "pontuacao": link.pontuacao_com_regras
@@ -84,9 +90,8 @@ def _retornar_estatisticas_mensais(session: SessionDep, jogador_id: str):
     estatisticas = defaultdict(
         lambda: {"pontos": 0, "vitorias": 0, "derrotas": 0, "empates": 0})
     for link in links:
-        ano = link.torneio.data_planejada.year
-        mes = link.torneio.data_planejada.month
-        chave = (ano, mes)
+        data = data_efetiva_torneio(link.torneio)
+        chave = (data.year, data.month)
         estatisticas[chave]["pontos"] += link.pontuacao_com_regras or 0
 
     for rodada in rodadas:

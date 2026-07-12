@@ -16,11 +16,15 @@ class Settings(BaseSettings):
     SECURITY_TOKEN_EXPIRATION: int = 30
     POKEMONTCG_IO_API_KEY: str = ""
 
-    MAIL_USERNAME: str = ""
-    MAIL_PASSWORD: str = ""
+    RESEND_API_KEY: str = ""
+    
     MAIL_FROM: str = ""
+    MAIL_FROM_NAME: str = "Brickei"
 
     FRONTEND_URL: str = ""
+
+    ADMIN_EMAIL: str = ""
+    ADMIN_SENHA: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -53,14 +57,17 @@ class Settings(BaseSettings):
                 "POKEMONTCG_IO_API_KEY", self.POKEMONTCG_IO_API_KEY)
 
             # Email
-            self.MAIL_USERNAME = os.getenv("MAIL_USERNAME", self.MAIL_USERNAME)
-            self.MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", self.MAIL_PASSWORD)
+            self.RESEND_API_KEY = os.getenv("RESEND_API_KEY", self.RESEND_API_KEY)
+            self.MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", self.MAIL_FROM_NAME)
             self.MAIL_FROM = os.getenv("MAIL_FROM", self.MAIL_FROM)
 
             # Frontend
             self.FRONTEND_URL = os.getenv("FRONTEND_URL", self.FRONTEND_URL)
             self.ALLOWED_ORIGINS = os.getenv(
                 "ALLOWED_ORIGINS", self.ALLOWED_ORIGINS)
+
+            self.ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", self.ADMIN_EMAIL)
+            self.ADMIN_SENHA = os.getenv("ADMIN_SENHA", self.ADMIN_SENHA)
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     def parse_allowed_origins(cls, v):

@@ -1,7 +1,7 @@
 from app.core.db import SessionDep
 from email_validator import validate_email, EmailNotValidError
 from app.core.exception import TopDeckedException
-from app.models import Usuario, Jogador, Loja
+from app.models import Usuario, Jogador, Loja, Administrador
 from sqlmodel import select
 from sqlalchemy import func
 
@@ -21,13 +21,15 @@ def verificar_novo_usuario(email: str, session: SessionDep) -> str:
 def retornar_info_por_usuario(usuario: Usuario, session: SessionDep) -> dict:
     infos = {}
     linha_db_info = {}
-    
+
     if usuario.tipo == "jogador":
         linha_db_info = session.exec(select(Jogador).where(Jogador.usuario_id == usuario.id)).first()
-    else:
+    elif usuario.tipo == "loja":
         linha_db_info = session.exec(select(Loja).where(Loja.usuario_id == usuario.id)).first()
         infos["endereco"] = linha_db_info.endereco
-        
+    else:
+        linha_db_info = session.exec(select(Administrador).where(Administrador.usuario_id == usuario.id)).first()
+
     infos["id"] = linha_db_info.id
     infos["nome"] = linha_db_info.nome
     infos["usuario_id"] = linha_db_info.usuario_id

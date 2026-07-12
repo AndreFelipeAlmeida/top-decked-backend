@@ -6,9 +6,12 @@ suíço do TCG. Ver docs/COMPOSICAO.md e docs/DIVIDA_TECNICA.md."""
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from app.core.db import get_session
 from sqlmodel import Session, select
 
 from app.models import (
+    Loja,
     CatalogoAtualizacao,
     Jogador,
     JogadorCriado,
@@ -20,7 +23,7 @@ from app.models import (
 )
 from app.services.PokemonCatalogoService import atualizar_catalogo_pokemon, garantir_catalogo_atualizado
 from app.utils.datetimeUtil import data_agora_brasil
-from app.utils.Enums import TCG
+from app.utils.Enums import TCG, StatusAprovacaoLoja
 
 
 def _login(client: TestClient, email: str, senha: str) -> str:
@@ -35,6 +38,12 @@ def _criar_loja_autenticada(client: TestClient, nome: str, email: str, senha: st
         json={"nome": nome, "endereco": "Rua X, 1", "email": email, "senha": senha},
     )
     assert r.status_code == 200, r.text
+    # Loja nasce PENDENTE -- aprova direto no banco pra manter este
+    # helper simples pros testes que nao sao sobre o fluxo de aprovacao.
+    session = client.app.dependency_overrides[get_session]()
+    loja_db = session.get(Loja, r.json()["id"])
+    loja_db.status = StatusAprovacaoLoja.APROVADA
+    session.commit()
     token = _login(client, email, senha)
     return r.json(), token
 
@@ -99,9 +108,11 @@ def _adicionar_participante(session: Session, torneio_id: str, regra_id: int, no
     session.commit()
     session.refresh(jogador_criado)
 
+    # Sem regra extra por padrão — ver comentário equivalente em
+    # test_routes_torneio.py._adicionar_participantes.
     link = JogadorTorneioLink(
         torneio_id=torneio_id, jogador_criado_id=jogador_criado.id, apelido=nome,
-        tipo_jogador_id=regra_id, pontuacao=0, pontuacao_com_regras=0,
+        pontuacao=0, pontuacao_com_regras=0,
     )
     session.add(link)
     session.commit()
@@ -286,8 +297,8 @@ def test_pontuacao_e_pareamento_de_torneio_vgc_funcionam_igual_ao_tcg(client: Te
 
     vencedor_link = session.get(JogadorTorneioLink, vencedor["link_id"])
     perdedor_link = session.get(JogadorTorneioLink, perdedor["link_id"])
-    assert vencedor_link.pontuacao_com_regras == 5  # pt_vitoria(3) + pt_oponente_ganha do perdedor(2)
-    assert perdedor_link.pontuacao_com_regras == -1  # pt_derrota(0) + pt_oponente_perde do vencedor(-1)
+    assert vencedor_link.pontuacao_com_regras == 3  # pt_vitoria, sem regra extra
+    assert perdedor_link.pontuacao_com_regras == 0  # pt_derrota, sem regra extra
 
     # Desempate suíço (OMW%/OOMW%) só é calculado como parte do recálculo
     # completo (TorneioService.calcular_pontuacao), não no finalizar de uma

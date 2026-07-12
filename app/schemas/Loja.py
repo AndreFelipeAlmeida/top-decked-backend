@@ -1,17 +1,20 @@
 from sqlmodel import Field
 from app.models import LojaBase
 from app.schemas.Usuario import UsuarioPublico
+from app.utils.Enums import StatusAprovacaoLoja
 
 
 class LojaPublicoTorneios(LojaBase):
     id: int
     usuario: UsuarioPublico
     n_torneios: int = 0
-    
-    
+    status: StatusAprovacaoLoja
+
+
 class LojaPublico(LojaBase):
     id: int
     usuario: UsuarioPublico
+    status: StatusAprovacaoLoja
 
 class LojaCriar(LojaBase):
     email: str | None = Field(default=None)

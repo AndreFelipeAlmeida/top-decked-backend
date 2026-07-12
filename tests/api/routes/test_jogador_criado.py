@@ -7,10 +7,12 @@ direta de tudo isso: ranking e créditos precisam mostrar esses jogadores
 mesmo sem conta (ver docs/JOGADORES.md)."""
 
 from fastapi.testclient import TestClient
+
+from app.core.db import get_session
 from sqlmodel import Session, select
 
-from app.models import JogadorCriado, JogadorTorneioLink
-from app.utils.Enums import TCG
+from app.models import JogadorCriado, JogadorTorneioLink, Loja
+from app.utils.Enums import TCG, StatusAprovacaoLoja
 
 
 def _login(client: TestClient, email: str, senha: str) -> str:
@@ -25,6 +27,12 @@ def _criar_loja_autenticada(client: TestClient, nome: str, email: str, senha: st
         json={"nome": nome, "endereco": "Rua X, 1", "email": email, "senha": senha},
     )
     assert r.status_code == 200, r.text
+    # Loja nasce PENDENTE -- aprova direto no banco pra manter este
+    # helper simples pros testes que nao sao sobre o fluxo de aprovacao.
+    session = client.app.dependency_overrides[get_session]()
+    loja_db = session.get(Loja, r.json()["id"])
+    loja_db.status = StatusAprovacaoLoja.APROVADA
+    session.commit()
     token = _login(client, email, senha)
     return r.json(), token
 
@@ -368,3 +376,41 @@ def test_vinculo_direto_a_jogador_existente_continua_funcionando(client: TestCli
     )
     assert r.status_code == 200, r.text
     assert r.json()["jogador_id"] == jogador["id"]
+
+
+def test_estatisticas_nao_conta_torneio_duas_vezes_para_juiz_e_jogador(client: TestClient, session: Session) -> None:
+    """Regressão: um jogador que também é Juiz no mesmo torneio (uma única
+    linha de JogadorTorneioLink, tipo=JOGADOR_E_JUIZ — fonte única de
+    verdade) não pode aparecer como tendo disputado 2 torneios quando só
+    disputou (e arbitrou) 1."""
+    _, token_loja = _criar_loja_autenticada(client, "Loja Juiz Estatisticas", "loja.juizestatisticas@gmail.com")
+    headers_loja = {"Authorization": f"Bearer {token_loja}"}
+    regra = _criar_regra(client, headers_loja)
+    torneio = _criar_torneio(client, headers_loja, regra["id"])
+
+    jogador, token_jogador = _criar_jogador_autenticado(client, "Duplo Papel", "duplopapel@gmail.com")
+    headers_jogador = {"Authorization": f"Bearer {token_jogador}"}
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"tcgs": [{"tcg": "POKEMON", "id": "gid-duplo-papel"}]},
+        headers=headers_jogador,
+    )
+    assert r.status_code == 200, r.text
+    jogador_criado_id = r.json()["tcgs"][0]["id"]
+
+    session.add(JogadorTorneioLink(
+        torneio_id=torneio["id"], jogador_criado_id=jogador_criado_id,
+        apelido="Duplo Papel", tipo="JOGADOR_E_JUIZ", pontuacao=0, pontuacao_com_regras=8,
+    ))
+    session.commit()
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/finalizar", headers=headers_loja)
+    assert r.status_code == 200, r.text
+
+    r = client.get("/api/jogadores/estatisticas", headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["torneio_totais"] == 1
+    assert len(body["historico"]) == 1
+    assert body["historico"][0]["pontuacao"] == 8

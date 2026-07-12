@@ -1,5 +1,9 @@
 from fastapi.testclient import TestClient
 
+from app.core.db import get_session
+from app.models import Loja
+from app.utils.Enums import StatusAprovacaoLoja
+
 
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
@@ -16,6 +20,12 @@ def _criar_loja(client: TestClient, nome: str, email: str, senha: str = "senha12
     }
     r = client.post("/api/lojas/", json=payload)
     assert r.status_code == 200, r.text
+    # Loja nasce PENDENTE -- aprova direto no banco pra manter este helper
+    # simples pros testes que não são sobre o fluxo de aprovação em si.
+    session = client.app.dependency_overrides[get_session]()
+    loja_db = session.get(Loja, r.json()["id"])
+    loja_db.status = StatusAprovacaoLoja.APROVADA
+    session.commit()
     return r.json()
 
 
