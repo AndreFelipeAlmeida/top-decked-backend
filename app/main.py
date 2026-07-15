@@ -1,6 +1,7 @@
 from app.core.config import settings
 from app.core.db import create_db_and_tables, engine
 from app.api.main import api_router
+from app.middleware.TenantHostMiddleware import TenantHostMiddleware
 from app.services.AdministradorService import bootstrap_admin_root
 from app.services.ConquistaService import seed_conquistas_catalogo
 from app.services.PokemonCatalogoService import garantir_catalogo_atualizado
@@ -31,6 +32,15 @@ app = FastAPI(lifespan=lifespan,
 UPLOAD_DIR = "app/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# TenantHostMiddleware adicionado ANTES do CORSMiddleware de propósito:
+# add_middleware empilha em LIFO (o último adicionado fica por FORA), então
+# CORS precisa ser o mais externo pra injetar os headers mesmo numa
+# resposta 404 que o TenantHostMiddleware corta antes de chegar nas rotas
+# (sem isso, o 404 de "loja não encontrada" apareceria pro browser como um
+# erro de rede genérico em vez do JSON de verdade, em requests cross-origin
+# de um subdomínio pro outro).
+app.add_middleware(TenantHostMiddleware, root_domain=settings.ROOT_DOMAIN)
 
 app.add_middleware(
     CORSMiddleware,

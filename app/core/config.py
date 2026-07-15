@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = ""
     ADMIN_SENHA: str = ""
 
+    # BRK-307: domínio raiz do SaaS — um Host que bate exatamente com este
+    # valor (ou é `localhost`/`127.0.0.1`, pra dev local) é modo global;
+    # um subdomínio dele (`{slug}.ROOT_DOMAIN`) trava o contexto na loja
+    # daquele slug (ver app/middleware/TenantHostMiddleware.py). O valor
+    # abaixo é só o default de fallback — configurável via variável de
+    # ambiente ROOT_DOMAIN (ver .env.example), nunca precisa mexer aqui pra
+    # trocar de domínio. Ver a checagem de segurança no __init__ logo
+    # abaixo: DEBUG=False com ROOT_DOMAIN=localhost/127.0.0.1/localtest.me
+    # derruba o boot de propósito.
+    ROOT_DOMAIN: str = "brickei.com.br"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -68,6 +79,24 @@ class Settings(BaseSettings):
 
             self.ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", self.ADMIN_EMAIL)
             self.ADMIN_SENHA = os.getenv("ADMIN_SENHA", self.ADMIN_SENHA)
+
+            self.ROOT_DOMAIN = os.getenv("ROOT_DOMAIN", self.ROOT_DOMAIN)
+
+            # ROOT_DOMAIN=localhost/127.0.0.1/localtest.me (usado só pra
+            # testar multi-tenancy por subdomínio em dev, ver
+            # docs/tcc/MULTI_TENANCY.md) nunca pode vazar pra um ambiente
+            # com DEBUG=False: o cookie de sessão sairia com um Domain que
+            # não bate com o domínio real de produção — login pararia de
+            # funcionar pra todo mundo, de um jeito silencioso e difícil de
+            # diagnosticar. Falha explícita no boot é melhor que isso.
+            if self.ROOT_DOMAIN in ("localhost", "127.0.0.1", "localtest.me"):
+                raise RuntimeError(
+                    f"ROOT_DOMAIN='{self.ROOT_DOMAIN}' com DEBUG=False — isso quebraria "
+                    "cookies de sessão e a resolução de subdomínio em produção. "
+                    "Se este é mesmo um ambiente de produção, aponte ROOT_DOMAIN pro "
+                    "domínio real (ex.: brickei.com.br); se é um ambiente de teste "
+                    "local, ligue DEBUG=True."
+                )
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     def parse_allowed_origins(cls, v):

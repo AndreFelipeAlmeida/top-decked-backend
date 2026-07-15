@@ -1,7 +1,11 @@
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
+from app.core.db import get_session
+from app.models import Loja
 from app.services.EmailService import criar_token_redefinicao_senha
 from app.core.security import verificar_senha
+from app.utils.Enums import StatusAprovacaoLoja
 
 
 def test_login_token_sucesso(client: TestClient):
@@ -18,6 +22,41 @@ def test_login_token_sucesso(client: TestClient):
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+
+
+def test_login_token_de_loja_retorna_tipo_e_slug(client: TestClient):
+    """BRK-308: o frontend usa tipo+slug da resposta de /login/token (sem
+    precisar de um segundo request) pra redirecionar o Dono de Loja direto
+    pro subdomínio dela."""
+    r = client.post(
+        "/api/lojas/",
+        json={"nome": "Loja Login Slug", "endereco": "Rua X", "email": "loja.loginslug@gmail.com", "senha": "senha123"},
+    )
+    session: Session = client.app.dependency_overrides[get_session]()
+    loja_db = session.get(Loja, r.json()["id"])
+    loja_db.status = StatusAprovacaoLoja.APROVADA
+    session.commit()
+
+    login_data = {"username": "loja.loginslug@gmail.com", "password": "senha123"}
+    response = client.post("/api/login/token", data=login_data)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tipo"] == "loja"
+    assert data["slug"] == "loja-login-slug"
+
+
+def test_login_token_de_jogador_nao_retorna_slug(client: TestClient):
+    client.post(
+        "/api/jogadores/",
+        json={"nome": "Jogador Login", "email": "jogador.loginslug@gmail.com", "senha": "senha123"},
+    )
+
+    login_data = {"username": "jogador.loginslug@gmail.com", "password": "senha123"}
+    response = client.post("/api/login/token", data=login_data)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tipo"] == "jogador"
+    assert data["slug"] is None
 
 
 def test_login_token_senha_errada(client: TestClient):

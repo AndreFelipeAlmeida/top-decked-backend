@@ -13,7 +13,14 @@ from app.utils.Enums import StatusAprovacaoLoja
 
 
 def _login(client: TestClient, email: str, senha: str):
-    return client.post("/api/login/token", data={"username": email, "password": senha})
+    r = client.post("/api/login/token", data={"username": email, "password": senha})
+    # BRK-309: ver comentário equivalente em outros arquivos de teste — o
+    # TestClient mantém um cookie jar persistente entre chamadas, e este
+    # arquivo testa várias contas (admin, lojas diferentes) no mesmo
+    # client; sem limpar aqui, o Authorization passado explicitamente nos
+    # testes seria ofuscado pelo cookie da ÚLTIMA conta logada.
+    client.cookies.clear()
+    return r
 
 
 def _criar_loja(client: TestClient, nome: str, email: str, senha: str = "senha123") -> dict:

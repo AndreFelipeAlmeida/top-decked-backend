@@ -30,6 +30,7 @@ from app.core.exception import TopDeckedException
 from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual
 from sqlmodel import select
+from sqlalchemy import func
 from typing import Dict
 
 
@@ -447,7 +448,11 @@ def editar_rodada(session: SessionDep,
             raise TopDeckedException.bad_request(
                 "O vencedor da mesa precisa ser um dos jogadores desta mesa")
         rodada.vencedor_id = vencedor_id
-        rodada.finalizada = vencedor_id is not None
+        # Enviar vencedor_id é a declaração explícita do organizador sobre o
+        # resultado da mesa — None aqui significa empate, não "ainda não
+        # jogou" (BRK-302). Por isso finaliza sempre que o campo é
+        # informado, mesmo quando o valor é None.
+        rodada.finalizada = True
 
     session.add(rodada)
     session.flush()
@@ -456,6 +461,77 @@ def editar_rodada(session: SessionDep,
     # novo sem resetar dobraria os pontos. Recalcula tudo do zero (mesmo
     # mecanismo de recalcular_pontuacao_torneio), preservando regras extras
     # já atribuídas por jogador.
+    if torneio.regra_basica_id:
+        torneio = editar_torneio_regras(
+            session, torneio, torneio.regra_basica_id, regras_extras_atuais(torneio))
+        session.add(torneio)
+        calcular_pontuacao(session, torneio)
+
+    session.commit()
+    session.refresh(torneio)
+    return retornar_torneio_completo(session, torneio)
+
+
+@router.delete("/{torneio_id}/rodadas/{num_rodada}", response_model=TorneioPublico)
+def deletar_rodada(session: SessionDep,
+                   torneio_id: str,
+                   num_rodada: int,
+                   usuario: Annotated[TokenData, Depends(retornar_usuario_atual)]):
+    """Exclusão de uma rodada inteira (todas as mesas daquele num_rodada) —
+    estritamente LIFO (BRK-302): só a última rodada gerada pode ser apagada.
+    Rodadas intermediárias já foram usadas como histórico de pareamento por
+    rodadas seguintes (RodadaService.nova_rodada evita reencontros olhando
+    esse histórico), então apagar uma do meio deixaria pareamentos futuros
+    inconsistentes com o que realmente aconteceu. O front nunca deve confiar
+    cegamente: a validação real é sempre feita aqui contra o banco."""
+    torneio = session.get(Torneio, torneio_id)
+    if not torneio:
+        raise TopDeckedException.not_found("Torneio não existe")
+
+    verificar_permissao_gerenciar_torneio(session, torneio, usuario)
+
+    maior_rodada = session.exec(
+        select(func.max(Rodada.num_rodada)).where(Rodada.torneio_id == torneio_id)
+    ).first()
+
+    if maior_rodada is None:
+        raise TopDeckedException.not_found("Nenhuma rodada gerada para este torneio")
+
+    if num_rodada != maior_rodada:
+        raise TopDeckedException.bad_request(
+            f"Só é possível excluir a última rodada gerada (rodada {maior_rodada}); "
+            "a exclusão de rodadas é sempre da mais recente para a mais antiga"
+        )
+
+    mesas = session.exec(
+        select(Rodada).where(
+            (Rodada.torneio_id == torneio_id) & (Rodada.num_rodada == num_rodada)
+        )
+    ).all()
+
+    for mesa in mesas:
+        rodada_composicoes = session.exec(
+            select(RodadaComposicao).where(RodadaComposicao.rodada_id == mesa.id)
+        ).all()
+        for rodada_composicao in rodada_composicoes:
+            composicao_partida = rodada_composicao.composicao_partida
+            session.delete(rodada_composicao)
+            # Pokémon GO clona uma ComposicaoPartida nova a cada rodada (ver
+            # ComposicaoService.garantir_composicao_partida) — TCG/VGC
+            # reaproveitam a mesma entre rodadas, então só apagamos aqui
+            # quando ela é exclusiva desta rodada (GO); senão destruiríamos a
+            # composição de rodadas anteriores que ainda a referenciam.
+            if torneio.jogo in JOGOS_COM_COMPOSICAO_POR_PARTIDA:
+                session.delete(composicao_partida)
+        session.delete(mesa)
+
+    torneio.rodada_atual = max(torneio.rodada_atual - 1, 0)
+    session.add(torneio)
+    session.flush()
+
+    # Mesma lógica de recomputo do zero usada em editar_rodada — sem ela, os
+    # pontos que a rodada apagada já tivesse distribuído ficariam presos em
+    # pontuacao/pontuacao_com_regras mesmo sem a Rodada existir mais.
     if torneio.regra_basica_id:
         torneio = editar_torneio_regras(
             session, torneio, torneio.regra_basica_id, regras_extras_atuais(torneio))
@@ -1024,6 +1100,7 @@ def inscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annotate
         jogador_criado_id=jogador_criado.id,
         apelido=jogador.nome,
         torneio_id=torneio.id,
+        loja_id=torneio.loja_id,
         tipo=TipoParticipanteTorneio.JOGADOR,
     )
 

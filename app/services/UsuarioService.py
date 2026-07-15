@@ -27,6 +27,7 @@ def retornar_info_por_usuario(usuario: Usuario, session: SessionDep) -> dict:
     elif usuario.tipo == "loja":
         linha_db_info = session.exec(select(Loja).where(Loja.usuario_id == usuario.id)).first()
         infos["endereco"] = linha_db_info.endereco
+        infos["slug"] = linha_db_info.slug
     else:
         linha_db_info = session.exec(select(Administrador).where(Administrador.usuario_id == usuario.id)).first()
 

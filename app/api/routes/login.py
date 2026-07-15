@@ -1,10 +1,13 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import RedirectResponse
 
-from app.core.security import Token, autenticar, criar_token_de_acesso, ACCESS_TOKEN_EXPIRE_MINUTES, TokenData
+from app.core.security import (
+    Token, autenticar, criar_token_de_acesso, ACCESS_TOKEN_EXPIRE_MINUTES, TokenData,
+    definir_cookies_sessao, limpar_cookies_sessao,
+)
 from app.dependencies import retornar_usuario_atual
 
 from typing import Annotated
@@ -51,7 +54,7 @@ def _decodificar_token_redefinicao(token: str, session: SessionDep) -> Usuario:
 
 @router.post("/token")
 async def login(
-    formulario: Annotated[OAuth2PasswordRequestForm, Depends()], session: SessionDep
+    formulario: Annotated[OAuth2PasswordRequestForm, Depends()], session: SessionDep, response: Response
 ) -> Token:
     usuario = autenticar(formulario.username, formulario.password, session)
 
@@ -61,7 +64,26 @@ async def login(
         dados=dados, delta_expiracao=access_token_expires
     )
 
-    return Token(access_token=access_token, token_type="bearer")
+    # BRK-309: cookie transversal (Domain=.brickei.com.br em produção) é a
+    # forma primária de sessão agora — access_token no corpo da resposta
+    # continua existindo só pra clientes não-browser (scripts, mobile) que
+    # não têm como usar cookie automaticamente.
+    definir_cookies_sessao(response, access_token)
+
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
+        tipo=dados["tipo"],
+        slug=dados.get("slug"),
+    )
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    """BRK-309: precisa de um endpoint de verdade porque o cookie de
+    sessão é HttpOnly — JS no frontend não consegue apagá-lo sozinho."""
+    limpar_cookies_sessao(response)
+    return {"detail": "Sessão encerrada."}
 
 
 @router.get("/profile")

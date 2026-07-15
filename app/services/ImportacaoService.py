@@ -82,7 +82,7 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
     session.refresh(torneio)
 
     jogadores_dict = _criar_relacao_jogador_torneio(xml, torneio, session)
-    inicio_real, fim_real = _importar_rodadas(xml, jogadores_dict, torneio.id, session)
+    inicio_real, fim_real = _importar_rodadas(xml, jogadores_dict, torneio.id, torneio.loja_id, session)
 
     # Torneio importado já nasce FINALIZADO, então nunca pode ficar sem data
     # real — o .tdf normalmente traz timestamps de partida suficientes pra
@@ -222,6 +222,7 @@ def _criar_relacao_jogador_torneio(xml: ET.Element, torneio: Torneio, session: S
         participacao = JogadorTorneioLink(
             jogador_criado_id=jogador_criado.id,
             torneio_id=torneio.id,
+            loja_id=torneio.loja_id,
             apelido=nome,
         )
 
@@ -234,7 +235,7 @@ def _criar_relacao_jogador_torneio(xml: ET.Element, torneio: Torneio, session: S
     return jogadores_dict
 
 
-def _importar_rodadas(xml: ET.Element, jogadores_dict: dict, torneio_id: str, session: SessionDep):
+def _importar_rodadas(xml: ET.Element, jogadores_dict: dict, torneio_id: str, loja_id: int, session: SessionDep):
     pods = _exigir_elemento(xml, "pods", "no arquivo").findall("pod")
     rodadas = []
     for pod in pods:
@@ -248,7 +249,7 @@ def _importar_rodadas(xml: ET.Element, jogadores_dict: dict, torneio_id: str, se
         num_rodada = _int_obrigatorio(rodada.get("number"), "O número de uma rodada")
         partidas = _exigir_elemento(rodada, "matches", f"na rodada {num_rodada} do arquivo")
 
-        _importar_partidas(partidas, jogadores_dict, torneio_id, num_rodada, session)
+        _importar_partidas(partidas, jogadores_dict, torneio_id, loja_id, num_rodada, session)
 
     return inicio_real, fim_real
 
@@ -287,7 +288,7 @@ def _calcular_fim_real(rodadas: list[ET.Element]) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: str, num_rodada: int, session: SessionDep):
+def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: str, loja_id: int, num_rodada: int, session: SessionDep):
     partidas_criadas = []
     for partida in partidas.findall("match"):
         jogador1_id = None
@@ -357,6 +358,7 @@ def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: s
             jogador2_id=jogador2_link_id,
             vencedor_id=vencedor_link_id,
             torneio_id=torneio_id,
+            loja_id=loja_id,
             num_rodada=num_rodada,
             mesa=mesa,
             data_de_inicio=data_de_inicio,

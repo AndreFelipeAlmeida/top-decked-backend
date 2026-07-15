@@ -178,6 +178,7 @@ def adicionar_juiz(session: SessionDep, torneio: Torneio, jogador_criado_id: int
 
     link = JogadorTorneioLink(
         torneio_id=torneio.id,
+        loja_id=torneio.loja_id,
         jogador_criado_id=jogador_criado_id,
         apelido=jogador_criado.apelido or jogador_criado.game_id,
         tipo=TipoParticipanteTorneio.JUIZ,

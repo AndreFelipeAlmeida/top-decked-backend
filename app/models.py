@@ -157,6 +157,14 @@ class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):
     )
     torneio_id: str | None = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
+    # BRK-304: denormalizado do torneio pai — evita join de 3 níveis
+    # (link -> torneio -> loja) pra decidir a quem esta linha pertence,
+    # essencial pra RLS (BRK-306) ser performático. NOT NULL de verdade no
+    # banco (a migration adiciona nullable, faz o backfill e só depois
+    # aperta pra NOT NULL — ver migrations/versions/*_loja_id_denormalizado.py);
+    # um trigger de integridade barra loja_id divergente do torneio pai em
+    # todo INSERT/UPDATE.
+    loja_id: int = Field(foreign_key="loja.id", index=True)
     torneio: Optional["Torneio"] | None = Relationship(
         back_populates="jogadores")
     regra_extra: Optional["TipoJogador"] | None = Relationship()
@@ -209,6 +217,11 @@ class Loja(LojaBase, table=True):
     # muda isso.
     status: StatusAprovacaoLoja = Field(
         sa_column=Column(Enum(StatusAprovacaoLoja)), default=StatusAprovacaoLoja.PENDENTE)
+    # BRK-305: identificador de domínio (ex.: evolutiongames.brickei.com.br)
+    # — computado a partir de `nome` na criação (ver
+    # app/api/routes/loja._gerar_slug_unico), nunca escolhido livremente
+    # pelo cliente, por isso também fora de LojaBase.
+    slug: str = Field(unique=True, index=True)
 
 
 # ---------------------------------- Administrador ----------------------------------
@@ -244,6 +257,8 @@ class Rodada(RodadaBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     torneio_id: str = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
+    # BRK-304: ver comentário equivalente em JogadorTorneioLink.loja_id.
+    loja_id: int = Field(foreign_key="loja.id", index=True)
 
     jogador1: Optional["JogadorTorneioLink"] = Relationship(
         back_populates="rodadas_como_jogador1",
@@ -403,6 +418,8 @@ class PontuacaoExtraBase(SQLModel):
 class PontuacaoExtra(PontuacaoExtraBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     torneio_id: str = Field(foreign_key="torneio.id", ondelete="CASCADE")
+    # BRK-304: ver comentário equivalente em JogadorTorneioLink.loja_id.
+    loja_id: int = Field(foreign_key="loja.id", index=True)
     criado_em: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False),
         default_factory=agora_brasil)

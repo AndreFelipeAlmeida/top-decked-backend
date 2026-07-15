@@ -49,6 +49,7 @@ def criar_pontuacao_extra(session: SessionDep, torneio: Torneio, dados: Pontuaca
     elif not link:
         link = JogadorTorneioLink(
             torneio_id=torneio.id,
+            loja_id=torneio.loja_id,
             jogador_criado_id=dados.jogador_criado_id,
             apelido=jogador_criado.apelido or jogador_criado.game_id,
             tipo=TipoParticipanteTorneio.JOGADOR,
@@ -60,6 +61,7 @@ def criar_pontuacao_extra(session: SessionDep, torneio: Torneio, dados: Pontuaca
 
     pontuacao_extra = PontuacaoExtra(
         torneio_id=torneio.id,
+        loja_id=torneio.loja_id,
         jogador_criado_id=dados.jogador_criado_id,
         motivo=dados.motivo,
         descricao=dados.descricao,

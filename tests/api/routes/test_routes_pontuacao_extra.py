@@ -20,6 +20,7 @@ from app.models import (
     JogadorTorneioLink,
     LojaJogadorLink,
     Rodada,
+    Torneio,
     Usuario,
 )
 from app.utils.datetimeUtil import data_agora_brasil
@@ -29,6 +30,16 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -127,6 +138,7 @@ def _cadastrar_juiz(client: TestClient, headers: dict, torneio_id: str, jogador_
 
 def _adicionar_participantes(session: Session, torneio_id: str, nomes: list[str]) -> list[dict]:
     participantes = []
+    loja_id = session.get(Torneio, torneio_id).loja_id
     for nome in nomes:
         u = Usuario(email=f"{nome.lower().replace(' ', '.')}@gmail.com", tipo="jogador",
                     is_active=True, data_cadastro=data_agora_brasil())
@@ -146,7 +158,7 @@ def _adicionar_participantes(session: Session, torneio_id: str, nomes: list[str]
         session.refresh(jogador_criado)
 
         link = JogadorTorneioLink(
-            torneio_id=torneio_id, jogador_criado_id=jogador_criado.id, apelido=nome,
+            torneio_id=torneio_id, loja_id=loja_id, jogador_criado_id=jogador_criado.id, apelido=nome,
             pontuacao=0, pontuacao_com_regras=0,
         )
         session.add(link)

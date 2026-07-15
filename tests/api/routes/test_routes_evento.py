@@ -34,6 +34,16 @@ from app.utils.Enums import TCG, TipoParticipanteTorneio, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -108,8 +118,9 @@ def _criar_jogador_da_loja(session: Session, loja_id: int, nome: str, tcg: TCG =
 
 
 def _adicionar_participante_torneio(session: Session, torneio_id: str, jogador_criado_id: int, apelido: str) -> int:
+    torneio = session.get(Torneio, torneio_id)
     link = JogadorTorneioLink(
-        torneio_id=torneio_id, jogador_criado_id=jogador_criado_id, apelido=apelido,
+        torneio_id=torneio_id, loja_id=torneio.loja_id, jogador_criado_id=jogador_criado_id, apelido=apelido,
         pontuacao=0, pontuacao_com_regras=0,
     )
     session.add(link)
@@ -348,8 +359,8 @@ def test_juiz_nao_pontua_automaticamente(client: TestClient, session: Session) -
     juiz = _criar_jogador_da_loja(session, loja["id"], "Juiz Evento")
 
     link = JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=juiz["jogador_criado_id"], apelido="Juiz Evento",
-        tipo=TipoParticipanteTorneio.JUIZ, pontuacao=0, pontuacao_com_regras=0,
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=juiz["jogador_criado_id"],
+        apelido="Juiz Evento", tipo=TipoParticipanteTorneio.JUIZ, pontuacao=0, pontuacao_com_regras=0,
     )
     session.add(link)
     session.commit()

@@ -36,6 +36,16 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -110,6 +120,7 @@ def _adicionar_participantes(session: Session, torneio_id: str, regra_id: int, n
     tanto o Jogador.id quanto o JogadorTorneioLink.id — os dois espaços de id
     são usados de propósito em pontos diferentes da API (ver módulo docstring)."""
     participantes = []
+    loja_id = session.get(Torneio, torneio_id).loja_id
     for nome in nomes:
         u = Usuario(email=f"{nome.lower().replace(' ', '.')}@gmail.com", tipo="jogador",
                     is_active=True, data_cadastro=data_agora_brasil())
@@ -134,7 +145,7 @@ def _adicionar_participantes(session: Session, torneio_id: str, regra_id: int, n
         # com essa regra básica) — regra extra é sempre um ajuste OPCIONAL
         # por cima da regra básica, não um valor padrão (ver TorneioService).
         link = JogadorTorneioLink(
-            torneio_id=torneio_id, jogador_criado_id=jogador_criado.id, apelido=nome,
+            torneio_id=torneio_id, loja_id=loja_id, jogador_criado_id=jogador_criado.id, apelido=nome,
             pontuacao=0, pontuacao_com_regras=0,
         )
         session.add(link)
@@ -536,6 +547,108 @@ def test_editar_rodada_atualiza_vencedor_e_pontuacao_sem_dobrar_ao_reeditar(clie
     assert rodada.finalizada is True
 
 
+def test_editar_rodada_com_empate_finaliza_e_soma_pontuacao_de_empate(client: TestClient, session: Session):
+    """BRK-302: declarar vencedor_id=None é uma ação explícita do organizador
+    (empate), não "ainda não jogou" — precisa finalizar a mesa (pra o front
+    poder mostrar "Sem Resultado" em vez de deixar a mesa em aberto) e somar
+    pt_empate pros dois lados."""
+    _, token = _criar_loja_autenticada(client, "Loja Empate Rodada", "loja.empaterodada@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+    jogador_id_para_link_id = {p["jogador_id"]: p["link_id"] for p in participantes}
+
+    client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    pareamento = r.json()
+    rodada_id = int(list(pareamento.keys())[0])
+    mesa = list(pareamento.values())[0][0]
+    link1_id = jogador_id_para_link_id[mesa["jogador1"]["jogador_id"]]
+    link2_id = jogador_id_para_link_id[mesa["jogador2"]["jogador_id"]]
+
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/rodadas/{rodada_id}",
+        json={"vencedor_id": None},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    rodada = session.get(Rodada, rodada_id)
+    assert rodada.vencedor_id is None
+    assert rodada.finalizada is True
+
+    link1 = session.get(JogadorTorneioLink, link1_id)
+    link2 = session.get(JogadorTorneioLink, link2_id)
+    assert link1.pontuacao_com_regras == 1  # pt_empate
+    assert link2.pontuacao_com_regras == 1  # pt_empate
+
+
+def test_deletar_rodada_apaga_a_ultima_e_libera_geracao_de_nova(client: TestClient, session: Session):
+    """BRK-302: exclusão LIFO — apagar a última rodada gerada precisa
+    remover as mesas, reverter a pontuação que elas já tivessem distribuído
+    e liberar `torneio.rodada_atual` pra que gerar a próxima rodada de novo
+    reutilize o mesmo número."""
+    _, token = _criar_loja_autenticada(client, "Loja Deletar Rodada", "loja.deletarrodada@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+    jogador_id_para_link_id = {p["jogador_id"]: p["link_id"] for p in participantes}
+
+    client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    pareamento = r.json()
+    rodada_id = int(list(pareamento.keys())[0])
+    mesa = list(pareamento.values())[0][0]
+    vencedor_link_id = jogador_id_para_link_id[mesa["jogador1"]["jogador_id"]]
+
+    client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/rodadas/{rodada_id}",
+        json={"vencedor_id": vencedor_link_id},
+        headers=headers,
+    )
+
+    r = client.delete(f"/api/lojas/torneios/{torneio['id']}/rodadas/1", headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert session.get(Rodada, rodada_id) is None
+    vencedor_link = session.get(JogadorTorneioLink, vencedor_link_id)
+    assert vencedor_link.pontuacao_com_regras == 0
+
+    torneio_db = session.get(Torneio, torneio["id"])
+    assert torneio_db.rodada_atual == 0
+
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    assert r.status_code == 200, r.text
+    nova_pareamento = r.json()
+    assert list(nova_pareamento.values())[0][0]["mesa"] == 1
+
+
+def test_deletar_rodada_intermediaria_e_rejeitado(client: TestClient, session: Session):
+    """A API nunca confia cegamente no frontend: mesmo que o botão de
+    excluir só apareça habilitado pra última rodada no front, o backend
+    revalida contra o banco e barra qualquer tentativa de apagar uma rodada
+    do meio."""
+    _, token = _criar_loja_autenticada(client, "Loja Rodada Intermediaria", "loja.rodadaintermediaria@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+
+    client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+
+    r = client.delete(f"/api/lojas/torneios/{torneio['id']}/rodadas/1", headers=headers)
+    assert r.status_code == 400, r.text
+
+    ainda_existe = session.exec(
+        select(Rodada).where((Rodada.torneio_id == torneio["id"]) & (Rodada.num_rodada == 1))
+    ).first()
+    assert ainda_existe is not None
+
+
 def test_editar_rodada_troca_pareamento_e_reseta_resultado_antigo(client: TestClient, session: Session):
     """Trocar Jogador 1/Jogador 2 de uma mesa já com resultado declarado
     precisa invalidar esse resultado — um vencedor apontando pra um jogador
@@ -786,3 +899,37 @@ def test_deletar_torneio_de_outra_loja_e_rejeitado(client: TestClient):
 
     r = client.delete(f"/api/lojas/torneios/{torneio['id']}", headers=headers_intruso)
     assert r.status_code == 403
+
+
+def test_loja_id_e_denormalizado_em_link_rodada_e_pontuacao_extra(client: TestClient, session: Session):
+    """BRK-304: JogadorTorneioLink, Rodada e PontuacaoExtra denormalizam
+    loja_id do torneio pai — todo fluxo real (pareamento de rodada,
+    pontuação extra) precisa deixar essas três tabelas com o MESMO loja_id
+    do torneio, nunca divergente."""
+    _, token = _criar_loja_autenticada(client, "Loja Loja Id", "loja.lojaid@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    loja_id_esperado = torneio["loja"]["id"]
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+    link_id = participantes[0]["link_id"]
+
+    client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+
+    jogador_criado_id = session.get(JogadorTorneioLink, link_id).jogador_criado_id
+    r = client.post(
+        f"/api/lojas/torneios/{torneio['id']}/pontuacao-extra",
+        json={"jogador_criado_id": jogador_criado_id, "motivo": "OUTROS", "pontos": 2, "descricao": "teste"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    links = session.exec(select(JogadorTorneioLink).where(JogadorTorneioLink.torneio_id == torneio["id"])).all()
+    rodadas = session.exec(select(Rodada).where(Rodada.torneio_id == torneio["id"])).all()
+    pontuacoes_extras = session.exec(select(PontuacaoExtra).where(PontuacaoExtra.torneio_id == torneio["id"])).all()
+
+    assert links and all(link.loja_id == loja_id_esperado for link in links)
+    assert rodadas and all(rodada.loja_id == loja_id_esperado for rodada in rodadas)
+    assert pontuacoes_extras and all(pe.loja_id == loja_id_esperado for pe in pontuacoes_extras)

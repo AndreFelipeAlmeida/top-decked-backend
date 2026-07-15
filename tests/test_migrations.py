@@ -105,3 +105,44 @@ def test_migration_corrige_coluna_tipo_ausente(monkeypatch, tmp_path):
     assert "tipo" in colunas
 
     command.check(cfg)
+
+
+def test_migration_backfill_slug_resolve_colisao_de_nomes_duplicados(monkeypatch, tmp_path):
+    """BRK-305: bancos existentes (produção) precisam de um slug pra cada
+    loja já cadastrada, e nomes de loja não são únicos — duas lojas
+    chamadas "Loja Repetida" cadastradas ANTES desta migration existir
+    precisam terminar com slugs distintos (sufixo numérico determinístico),
+    nunca colidindo nem ficando NULL."""
+    import sqlalchemy as sa
+    from app.core.config import settings
+
+    scratch_db = tmp_path / "migrations_slug_backfill_check.db"
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{scratch_db}")
+
+    cfg = Config(str(ALEMBIC_INI))
+    command.upgrade(cfg, "558062a78681")  # head anterior ao slug
+
+    engine = sa.create_engine(f"sqlite:///{scratch_db}")
+    with engine.begin() as conn:
+        for i in range(3):
+            conn.execute(sa.text(
+                "INSERT INTO usuario (email, is_active, data_cadastro, tipo, senha) "
+                "VALUES (:email, 1, '2026-01-01 00:00:00', 'loja', 'x')"
+            ), {"email": f"loja.repetida.{i}@gmail.com"})
+        usuario_ids = [row[0] for row in conn.execute(sa.text(
+            "SELECT id FROM usuario WHERE email LIKE 'loja.repetida.%@gmail.com' ORDER BY id"
+        ))]
+        for usuario_id in usuario_ids:
+            conn.execute(sa.text(
+                "INSERT INTO loja (nome, usuario_id, status) VALUES ('Loja Repetida', :usuario_id, 'APROVADA')"
+            ), {"usuario_id": usuario_id})
+
+    command.upgrade(cfg, "head")
+
+    with engine.begin() as conn:
+        slugs = [row[0] for row in conn.execute(sa.text(
+            "SELECT slug FROM loja WHERE nome = 'Loja Repetida' ORDER BY id"
+        ))]
+    assert slugs == ["loja-repetida", "loja-repetida-2", "loja-repetida-3"]
+
+    command.check(cfg)

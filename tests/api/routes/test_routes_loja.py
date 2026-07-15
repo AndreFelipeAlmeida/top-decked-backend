@@ -8,6 +8,16 @@ from app.utils.Enums import StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -40,6 +50,29 @@ def test_criar_loja(client: TestClient):
     assert data["nome"] == "Loja Teste"
     assert "id" in data
     assert data["usuario"]["email"] == "loja_teste@gmail.com"
+
+
+def test_criar_loja_gera_slug_a_partir_do_nome(client: TestClient):
+    data = _criar_loja(client, "Evolution Games", "evolution.games@gmail.com")
+    assert data["slug"] == "evolution-games"
+
+
+def test_criar_loja_com_nome_acentuado_remove_acentos_do_slug(client: TestClient):
+    data = _criar_loja(client, "Ginásio São Paulo", "ginasio.saopaulo@gmail.com")
+    assert data["slug"] == "ginasio-sao-paulo"
+
+
+def test_criar_loja_com_nome_duplicado_gera_slug_com_sufixo_numerico(client: TestClient):
+    """BRK-305: o slug precisa ser único (identifica o subdomínio) —
+    lojas com o mesmo nome não podem colidir, o desempate é um sufixo
+    numérico determinístico."""
+    primeira = _criar_loja(client, "Loja Repetida", "repetida.um@gmail.com")
+    segunda = _criar_loja(client, "Loja Repetida", "repetida.dois@gmail.com")
+    terceira = _criar_loja(client, "Loja Repetida", "repetida.tres@gmail.com")
+
+    assert primeira["slug"] == "loja-repetida"
+    assert segunda["slug"] == "loja-repetida-2"
+    assert terceira["slug"] == "loja-repetida-3"
 
 
 def test_criar_loja_email_duplicado(client: TestClient):

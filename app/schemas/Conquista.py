@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 from app.models import ConquistaBase
-from app.utils.Enums import CategoriaConquista
+from app.utils.Enums import CategoriaConquista, TCG
 
 
 class ConquistaNivelPublico(BaseModel):
@@ -33,6 +33,7 @@ class HistoricoConquistaPublico(BaseModel):
     conquista_codigo: str
     conquista_nome: str
     conquista_icone: str
+    conquista_tcg: Optional[TCG]
     categoria: CategoriaConquista
     nivel: int
     nome_nivel: str

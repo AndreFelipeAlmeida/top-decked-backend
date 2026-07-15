@@ -57,6 +57,7 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
             jogador1_id=jogador.id,
             jogador2_id=adversario.id if adversario else None,
             torneio_id=torneio.id,
+            loja_id=torneio.loja_id,
             num_rodada=rodada_atual,
             mesa=mesa_livre,
             data_de_inicio=data_agora_brasil(),

@@ -15,10 +15,24 @@ from app.core.security import TokenData
 from app.dependencies import retornar_loja_atual
 
 from app.utils.Enums import StatusTorneio
+from app.utils.SlugUtil import slugify
 
 router = APIRouter(
     prefix="/lojas",
     tags=["Lojas"])
+
+
+def _gerar_slug_unico(session: SessionDep, nome: str) -> str:
+    """Resolve colisão com um sufixo numérico determinístico (BRK-305) —
+    "Evolution Games" e outra loja chamada igual não podem colidir no
+    mesmo subdomínio."""
+    base = slugify(nome)
+    slug = base
+    sufixo = 2
+    while session.exec(select(Loja).where(Loja.slug == slug)).first():
+        slug = f"{base}-{sufixo}"
+        sufixo += 1
+    return slug
 
 
 @router.post("/", response_model=LojaPublico)
@@ -41,6 +55,7 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
         endereco=loja.endereco,
         telefone=loja.telefone,
         site=loja.site,
+        slug=_gerar_slug_unico(session, loja.nome),
         usuario=novo_usuario
     )
 

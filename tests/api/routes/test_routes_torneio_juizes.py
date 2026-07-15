@@ -24,6 +24,16 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -160,7 +170,7 @@ def test_cadastrar_juiz_jogador_ja_inscrito_como_jogador_vira_jogador_e_juiz(cli
     torneio = _criar_torneio(client, headers, regra["id"])
     jogador = _criar_jogador_da_loja(session, loja["id"], "Jogador Comum")
     session.add(JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=jogador["jogador_criado_id"],
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=jogador["jogador_criado_id"],
         apelido=jogador["nome"], tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=4,
     ))
     session.commit()
@@ -192,7 +202,7 @@ def test_cadastrar_juiz_de_quem_ja_e_jogador_e_juiz_e_rejeitado(client: TestClie
     torneio = _criar_torneio(client, headers, regra["id"])
     jogador = _criar_jogador_da_loja(session, loja["id"], "Jogador Duplo")
     session.add(JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=jogador["jogador_criado_id"],
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=jogador["jogador_criado_id"],
         apelido=jogador["nome"], tipo="JOGADOR_E_JUIZ", pontuacao=0, pontuacao_com_regras=0,
     ))
     session.commit()
@@ -251,7 +261,7 @@ def test_remover_juiz_que_tambem_e_jogador_faz_downgrade_sem_deletar(client: Tes
     torneio = _criar_torneio(client, headers, regra["id"])
     pessoa = _criar_jogador_da_loja(session, loja["id"], "Duplo Papel Downgrade")
     link = JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=pessoa["jogador_criado_id"],
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=pessoa["jogador_criado_id"],
         apelido=pessoa["nome"], tipo="JOGADOR_E_JUIZ", pontuacao=0, pontuacao_com_regras=9,
     )
     session.add(link)
@@ -410,11 +420,11 @@ def test_jogador_e_juiz_entra_no_pareamento_e_no_ranking_do_torneio(client: Test
     um = _criar_jogador_da_loja(session, loja["id"], "Um Duplo Papel")
     dois = _criar_jogador_da_loja(session, loja["id"], "Dois Comum")
     session.add(JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=um["jogador_criado_id"],
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=um["jogador_criado_id"],
         apelido=um["nome"], tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=0,
     ))
     session.add(JogadorTorneioLink(
-        torneio_id=torneio["id"], jogador_criado_id=dois["jogador_criado_id"],
+        torneio_id=torneio["id"], loja_id=torneio["loja"]["id"], jogador_criado_id=dois["jogador_criado_id"],
         apelido=dois["nome"], tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=0,
     ))
     session.commit()

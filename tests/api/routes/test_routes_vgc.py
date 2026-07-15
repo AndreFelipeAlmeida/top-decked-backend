@@ -18,6 +18,7 @@ from app.models import (
     JogadorTorneioLink,
     RepresentacaoComposicao,
     RepresentacaoComposicaoUnidade,
+    Torneio,
     UnidadeCatalogo,
     Usuario,
 )
@@ -29,6 +30,16 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
+    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # mantem um cookie jar persistente, como um browser de verdade) -- sem
+    # limpar aqui, chamadas seguintes que passam Authorization no header
+    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
+    # (silenciosamente autenticando como a pessoa errada quando um teste usa
+    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
+    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
+    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
+    # depender só do header, como antes do BRK-309.
+    client.cookies.clear()
     return r.json()["access_token"]
 
 
@@ -110,8 +121,9 @@ def _adicionar_participante(session: Session, torneio_id: str, regra_id: int, no
 
     # Sem regra extra por padrão — ver comentário equivalente em
     # test_routes_torneio.py._adicionar_participantes.
+    torneio = session.get(Torneio, torneio_id)
     link = JogadorTorneioLink(
-        torneio_id=torneio_id, jogador_criado_id=jogador_criado.id, apelido=nome,
+        torneio_id=torneio_id, loja_id=torneio.loja_id, jogador_criado_id=jogador_criado.id, apelido=nome,
         pontuacao=0, pontuacao_com_regras=0,
     )
     session.add(link)

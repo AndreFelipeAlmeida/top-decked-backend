@@ -9,12 +9,14 @@ class LojaPublicoTorneios(LojaBase):
     usuario: UsuarioPublico
     n_torneios: int = 0
     status: StatusAprovacaoLoja
+    slug: str
 
 
 class LojaPublico(LojaBase):
     id: int
     usuario: UsuarioPublico
     status: StatusAprovacaoLoja
+    slug: str
 
 class LojaCriar(LojaBase):
     email: str | None = Field(default=None)

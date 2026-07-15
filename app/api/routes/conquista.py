@@ -78,6 +78,7 @@ def get_historico_conquistas(
             "conquista_codigo": registro.conquista.codigo,
             "conquista_nome": registro.conquista.nome,
             "conquista_icone": registro.conquista.icone,
+            "conquista_tcg": registro.conquista.tcg,
             "categoria": registro.conquista.categoria,
             "nivel": registro.nivel,
             "nome_nivel": nivel_def.nome_nivel if nivel_def else str(registro.nivel),

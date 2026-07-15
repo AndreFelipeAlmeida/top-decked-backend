@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import admin, loja, jogador, login, torneio, tipoJogador, ranking, estoque, lojaJogadorLink, enums, categoria, conquista, composicao, temporada, pontuacaoExtra, evento
+from app.api.routes import admin, loja, jogador, login, torneio, tipoJogador, ranking, estoque, lojaJogadorLink, enums, categoria, conquista, composicao, temporada, pontuacaoExtra, evento, tenant
 from app.core.config import settings
 
 api_router = APIRouter(prefix=settings.API_PREFIX)
@@ -24,3 +24,4 @@ api_router.include_router(temporada.router)
 api_router.include_router(pontuacaoExtra.router)
 api_router.include_router(evento.router)
 api_router.include_router(admin.router)
+api_router.include_router(tenant.router)
