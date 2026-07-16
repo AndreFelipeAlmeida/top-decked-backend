@@ -28,7 +28,7 @@ from app.utils.datetimeUtil import agora_brasil
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
-from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual
+from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual, contexto_dominio
 from sqlmodel import select
 from sqlalchemy import func
 from typing import Dict
@@ -1039,8 +1039,21 @@ def deletar_torneio(session: SessionDep,
 
 
 @router.get("/", response_model=list[TorneioPublico])
-def get_torneios(session: SessionDep):
-    torneios = session.exec(select(Torneio))
+def get_torneios(
+    session: SessionDep,
+    loja_id: Annotated[int | None, Depends(contexto_dominio)] = None,
+):
+    # BRK-407: listagem global do jogador (Torneios/Rankings navegam TODAS
+    # as lojas quando no domínio raiz) — mas dentro do subdomínio de uma
+    # loja específica, contexto_dominio (resolvido pelo TenantHostMiddleware
+    # a partir do Host, BRK-307) já trava o resultado só naquela loja. Não
+    # depende do front mandar nenhum parâmetro: o Host já é a fonte da
+    # verdade, então o vazamento fica barrado mesmo que o front esqueça.
+    query = select(Torneio)
+    if loja_id is not None:
+        query = query.where(Torneio.loja_id == loja_id)
+
+    torneios = session.exec(query)
     return [retornar_torneio_completo(session, torneio) for torneio in torneios]
 
 

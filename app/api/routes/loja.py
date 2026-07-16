@@ -12,9 +12,9 @@ from app.services.UsuarioService import verificar_novo_usuario
 from app.services.EmailService import processar_ativacao_usuario
 from app.utils.datetimeUtil import data_agora_brasil
 from app.core.security import TokenData
-from app.dependencies import retornar_loja_atual
+from app.dependencies import retornar_loja_atual, retornar_usuario_atual_opcional
 
-from app.utils.Enums import StatusTorneio
+from app.utils.Enums import StatusTorneio, StatusAprovacaoLoja
 from app.utils.SlugUtil import slugify
 
 router = APIRouter(
@@ -72,8 +72,27 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
 
 
 @router.get("/", response_model=list[LojaPublicoTorneios])
-def retornar_lojas(session: SessionDep):
-    lojas = session.exec(select(Loja)).all()
+def retornar_lojas(
+    session: SessionDep,
+    token_data: Annotated[TokenData | None, Depends(retornar_usuario_atual_opcional)] = None,
+):
+    # BRK-403: página de diretório é pública, mas só faz sentido divulgar
+    # lojas já aprovadas — PENDENTE/REJEITADA não são "descobríveis"
+    # publicamente (a própria loja não tem nem subdomínio funcional ainda).
+    lojas = session.exec(select(Loja).where(Loja.status == StatusAprovacaoLoja.APROVADA)).all()
+
+    # Cross-referência com os vínculos do próprio jogador (se logado) pra
+    # marcar em quais lojas ele já é organizador e em quais TCGs — GET
+    # /lojas/ nunca exige login, isso só enriquece a resposta quando dá.
+    tcgs_por_loja: dict[int, list[str]] = {}
+    if token_data and token_data.tipo == "jogador":
+        links = session.exec(
+            select(LojaJogadorLink).where(LojaJogadorLink.jogador_id == token_data.id)
+        ).all()
+        for link in links:
+            if link.loja_id is None or not link.organizacoes:
+                continue
+            tcgs_por_loja[link.loja_id] = [org.tcg for org in link.organizacoes]
 
     resultado = []
     for loja in lojas:
@@ -84,6 +103,7 @@ def retornar_lojas(session: SessionDep):
         loja_publico = LojaPublicoTorneios.model_validate(loja)
 
         loja_publico.n_torneios = qtd_torneios
+        loja_publico.tcgs_organizados = tcgs_por_loja.get(loja.id, [])
         resultado.append(loja_publico)
 
     return resultado

@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.core.db import get_session
-from app.models import Loja
+from app.models import Loja, LojaJogadorLink
 from app.utils.Enums import StatusAprovacaoLoja
 
 
@@ -39,10 +39,74 @@ def _criar_loja(client: TestClient, nome: str, email: str, senha: str = "senha12
     return r.json()
 
 
+def _criar_jogador_autenticado(client: TestClient, nome: str, email: str, senha: str = "senha123") -> tuple[dict, dict]:
+    r = client.post("/api/jogadores/", json={"nome": nome, "email": email, "senha": senha})
+    assert r.status_code == 200, r.text
+    token = _login(client, email, senha)
+    return r.json(), {"Authorization": f"Bearer {token}"}
+
+
 def test_retornar_lojas_vazio(client: TestClient):
     r = client.get("/api/lojas/")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_retornar_lojas_so_lista_aprovadas(client: TestClient):
+    """BRK-403: a página de diretório é pública, mas uma loja PENDENTE ainda
+    nem tem subdomínio funcional de verdade pro visitante acessar — não faz
+    sentido divulgá-la."""
+    _criar_loja(client, "Loja Aprovada Diretorio", "loja.aprovada.diretorio@gmail.com")
+
+    r = client.post(
+        "/api/lojas/",
+        json={"nome": "Loja Pendente Diretorio", "email": "loja.pendente.diretorio@gmail.com", "senha": "senha123"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.get("/api/lojas/")
+    nomes = [loja["nome"] for loja in r.json()]
+    assert "Loja Aprovada Diretorio" in nomes
+    assert "Loja Pendente Diretorio" not in nomes
+
+
+def test_retornar_lojas_sem_login_nao_marca_tcgs_organizados(client: TestClient):
+    _criar_loja(client, "Loja Anonima Diretorio", "loja.anonima.diretorio@gmail.com")
+
+    r = client.get("/api/lojas/")
+    assert r.status_code == 200
+    loja = next(l for l in r.json() if l["nome"] == "Loja Anonima Diretorio")
+    assert loja["tcgs_organizados"] == []
+
+
+def test_retornar_lojas_marca_tcgs_organizados_do_jogador_logado(client: TestClient):
+    """BRK-403: GET /lojas/ cruza com os vínculos do jogador logado (se
+    houver) pra marcar em qual loja ele já é organizador e em quais TCGs —
+    puramente informativo, o endpoint continua público."""
+    loja_organizada = _criar_loja(client, "Loja Organizada Diretorio", "loja.organizada.diretorio@gmail.com")
+    loja_qualquer = _criar_loja(client, "Loja Qualquer Diretorio", "loja.qualquer.diretorio@gmail.com")
+    jogador, headers_jogador = _criar_jogador_autenticado(
+        client, "Organizador Diretorio", "organizador.diretorio@gmail.com"
+    )
+
+    session = client.app.dependency_overrides[get_session]()
+    session.add(LojaJogadorLink(jogador_id=jogador["id"], loja_id=loja_organizada["id"], apelido="Organizador"))
+    session.commit()
+
+    token_loja = _login(client, "loja.organizada.diretorio@gmail.com", "senha123")
+    r = client.post(
+        f"/api/lojas/jogador/{jogador['id']}/promover",
+        json={"tcg": "POKEMON"},
+        headers={"Authorization": f"Bearer {token_loja}"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.get("/api/lojas/", headers=headers_jogador)
+    assert r.status_code == 200
+    por_nome = {loja["nome"]: loja for loja in r.json()}
+    assert por_nome["Loja Organizada Diretorio"]["tcgs_organizados"] == ["POKEMON"]
+    assert por_nome["Loja Qualquer Diretorio"]["tcgs_organizados"] == []
+    assert loja_qualquer["nome"] == "Loja Qualquer Diretorio"
 
 
 def test_criar_loja(client: TestClient):

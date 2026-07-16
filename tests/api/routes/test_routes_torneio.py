@@ -185,6 +185,52 @@ def test_criar_torneio_com_formato_invalido_e_rejeitado(client: TestClient):
     assert r.status_code == 422
 
 
+def test_get_torneios_sem_tenant_traz_todas_as_lojas(client: TestClient):
+    """GET /lojas/torneios/ é a listagem global usada pelo jogador navegando
+    pelo domínio raiz (sem contexto_dominio, ver BRK-407) — precisa mostrar
+    torneios de qualquer loja."""
+    _, token_a = _criar_loja_autenticada(client, "Loja Global A", "loja.globalA@gmail.com")
+    _, token_b = _criar_loja_autenticada(client, "Loja Global B", "loja.globalB@gmail.com")
+
+    regra_a = _criar_regra(client, {"Authorization": f"Bearer {token_a}"})
+    regra_b = _criar_regra(client, {"Authorization": f"Bearer {token_b}"})
+    _criar_torneio(client, {"Authorization": f"Bearer {token_a}"}, regra_a["id"])
+    _criar_torneio(client, {"Authorization": f"Bearer {token_b}"}, regra_b["id"])
+
+    r = client.get("/api/lojas/torneios/")
+    assert r.status_code == 200
+    nomes_lojas = {t["loja"]["nome"] for t in r.json()}
+    assert nomes_lojas == {"Loja Global A", "Loja Global B"}
+
+
+def test_get_torneios_com_tenant_filtra_so_a_loja_do_subdominio(client: TestClient):
+    """BRK-407: dentro do subdomínio de uma loja, a mesma listagem global
+    (usada por Torneios/Rankings do jogador) precisa vir travada só nos
+    torneios daquela loja — contexto_dominio (resolvido pelo Host via
+    TenantHostMiddleware, ver BRK-307) é quem decide isso, então o front
+    não precisa (e nem consegue) contornar mandando outro loja_id."""
+    from app.dependencies import contexto_dominio
+
+    loja_a, token_a = _criar_loja_autenticada(client, "Loja Tenant A", "loja.tenantA@gmail.com")
+    _, token_b = _criar_loja_autenticada(client, "Loja Tenant B", "loja.tenantB@gmail.com")
+
+    regra_a = _criar_regra(client, {"Authorization": f"Bearer {token_a}"})
+    regra_b = _criar_regra(client, {"Authorization": f"Bearer {token_b}"})
+    _criar_torneio(client, {"Authorization": f"Bearer {token_a}"}, regra_a["id"])
+    _criar_torneio(client, {"Authorization": f"Bearer {token_b}"}, regra_b["id"])
+
+    # Simula a requisição chegando via subdomínio da Loja A — mais direto
+    # (e isolado do banco real) do que montar um Host de verdade contra o
+    # app compartilhado, ver docstring de TenantHostMiddleware sobre por
+    # que o middleware da app real não enxerga o banco de teste.
+    client.app.dependency_overrides[contexto_dominio] = lambda: loja_a["id"]
+
+    r = client.get("/api/lojas/torneios/")
+    assert r.status_code == 200
+    nomes_lojas = {t["loja"]["nome"] for t in r.json()}
+    assert nomes_lojas == {"Loja Tenant A"}
+
+
 def test_finalizar_torneio_preenche_data_real_quando_ausente(client: TestClient):
     """Um torneio finalizado nunca pode ficar sem inicio_real/fim_real —
     são a base de toda validação de regra de negócio dali pra frente

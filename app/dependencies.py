@@ -35,6 +35,20 @@ def contexto_dominio(request: Request) -> int | None:
     return getattr(request.state, "loja_id", None)
 
 
+def _token_data_do_payload(payload: dict) -> TokenData:
+    token_data = TokenData(
+        id=payload.get("id"),
+        tipo=payload.get("tipo"),
+        nome=payload.get("nome"),
+        email=payload.get("email"),
+        usuario_id=payload.get("usuario_id"),
+    )
+    if token_data.tipo == "loja":
+        token_data.endereco = payload.get("endereco")
+        token_data.slug = payload.get("slug")
+    return token_data
+
+
 async def retornar_usuario_atual(
     request: Request,
     session: SessionDep,
@@ -75,20 +89,36 @@ async def retornar_usuario_atual(
     except jwt.InvalidTokenError:
         raise TopDeckedException.unauthorized("Token inválido")
 
-    id = payload.get("id")
-    tipo = payload.get("tipo")
-    nome = payload.get("nome")
-    email = payload.get("email")
-    usuario_id = payload.get("usuario_id")
+    return _token_data_do_payload(payload)
 
-    token_data = TokenData(id=id, tipo=tipo, nome=nome,
-                           email=email, usuario_id=usuario_id)
 
-    if tipo == "loja":
-        token_data.endereco = payload.get("endereco")
-        token_data.slug = payload.get("slug")
+async def retornar_usuario_atual_opcional(
+    request: Request,
+    session: SessionDep,
+    token_header: Annotated[str | None, Depends(OAUTH2_SCHEME)] = None,
+) -> TokenData | None:
+    """Mesma resolução de retornar_usuario_atual, mas tolerante: retorna
+    None (em vez de levantar 401/403) quando não há sessão nenhuma ou o
+    token é inválido/expirado. Usado por endpoints públicos que só
+    enriquecem a resposta SE o visitante estiver logado (ex.: GET /lojas/,
+    BRK-403, marca em qual loja o jogador já organiza) — o endpoint
+    continua funcionando normalmente pra quem não está logado.
 
-    return token_data
+    De propósito não checa CSRF: é só chamada por rotas GET (nunca muda
+    estado), e CSRF nunca se aplicou a GET mesmo em retornar_usuario_atual
+    (ver _METODOS_MUTAVEIS acima)."""
+    token = request.cookies.get(COOKIE_ACCESS_TOKEN) or token_header
+    if not token:
+        return None
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if not await validar_token(payload=payload, session=session):
+            return None
+    except jwt.PyJWTError:
+        return None
+
+    return _token_data_do_payload(payload)
 
 
 async def retornar_loja_atual(token_data: Annotated[str, Depends(retornar_usuario_atual)]):
