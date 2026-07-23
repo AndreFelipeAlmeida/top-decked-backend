@@ -39,7 +39,8 @@ class Usuario(UsuarioBase, table=True):
         try:
             valid = validate_email(email)
             num_usuarios = session.scalar(
-                select(func.count(Usuario.id)).where(Usuario.email == email))
+                select(func.count(Usuario.id)).where(
+                    Usuario.email == email, Usuario.id != self.id))
 
             if num_usuarios > 0:
                 raise TopDeckedException.bad_request(
@@ -73,15 +74,10 @@ class Jogador(JogadorBase, table=True):
     tcgs: List["JogadorCriado"] = Relationship(
         back_populates="jogador")
     lojas: List["LojaJogadorLink"] = Relationship(
-        back_populates="jogador")
+        back_populates="jogador",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 # ---------------------------------- JogadorCriado ----------------------------------
-# A âncora real de identidade de um jogador dentro de um TCG: game_id + apelido
-# + tcg, criada (por uma loja, manualmente) ou importada (via .tdf) mesmo sem
-# o jogador ter conta na plataforma. `jogador_id` só é preenchido quando um
-# Jogador real registrado reivindica esse game_id/tcg no próprio perfil — é
-# essa reivindicação que "liga" o histórico de torneios/créditos à conta real,
-# não o contrário. Ver docs/JOGADORES.md.
 
 
 class JogadorCriado(SQLModel, table=True):
@@ -96,10 +92,6 @@ class JogadorCriado(SQLModel, table=True):
     tcg: TCG = Field(nullable=False, default=TCG.POKEMON)
     apelido: Optional[str] = Field(default=None)
     jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id")
-    # Preenchida só a partir de import de torneio (.tdf trazendo <birthdate>),
-    # e só na criação do JogadorCriado — se ele já existir, o valor atual é
-    # mantido (mesmo se for None), nunca sobrescrito por um import
-    # posterior. Ver docs/JOGADORES.md.
     data_nascimento: Optional[date] = Field(default=None)
     jogador: Optional["Jogador"] | None = Relationship(back_populates="tcgs")
 
@@ -110,35 +102,15 @@ class JogadorTorneioLinkBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_criado_id: int = Field(
         foreign_key="jogadorcriado.id")
-    # Regra ADICIONAL (opcional) desta participação — não substitui a regra
-    # básica do torneio (Torneio.regra_basica_id), só soma/subtrai em cima
-    # dela: pt_vitoria/pt_derrota/pt_empate viram deltas aplicados à própria
-    # pontuação, e pt_oponente_ganha/pt_oponente_perde/pt_oponente_empate
-    # viram deltas aplicados a quem joga CONTRA este jogador. None (o normal)
-    # = usa só a regra básica, sem ajuste nenhum (ver TorneioService
-    # calcular_pontuacao_rodada e docs/REGRA_EXTRA.md).
     regra_extra_id: int | None = Field(
         default=None, foreign_key="tipojogador.id")
-    # Papel do jogador NESTE torneio — ver TipoParticipanteTorneio. JUIZ é
-    # atribuído automaticamente ao dar Pontuação Extra com motivo "Juíz" pra
-    # alguém que ainda não estava no torneio (ver PontuacaoExtraService);
-    # exclui essa participação do pareamento de rodadas e do ranking/pódio
-    # deste torneio específico, sem afetar o ranking geral entre torneios
-    # (ver docs/PONTUACAO_EXTRA.md).
     tipo: TipoParticipanteTorneio = Field(
         default=TipoParticipanteTorneio.JOGADOR, nullable=False)
     pontuacao: float = Field(default=0)
     pontuacao_com_regras: float = Field(default=0)
     apelido: Optional[str] = Field(default=None)
-    # Ícone de arquétipo (2 unidades) — ver docs/COMPOSICAO.md. Independente
-    # da composição completa (JogadorTorneioLink.composicao_unidades), que é
-    # opcional.
     composicao_representacao_id: int | None = Field(
         default=None, foreign_key="representacaocomposicao.id")
-    # Contadores + desempate suíço (OMW%/OOMW%) desta participação —
-    # recalculados em TorneioService.calcular_desempate_suico toda vez que
-    # calcular_pontuacao roda (import, troca de regra, botão de recalcular).
-    # Só preenchido para jogos suíços (Pokémon TCG/VGC) — ver docs/RANKING.md.
     vitorias: int = Field(default=0)
     derrotas: int = Field(default=0)
     empates: int = Field(default=0)
@@ -157,13 +129,6 @@ class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):
     )
     torneio_id: str | None = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
-    # BRK-304: denormalizado do torneio pai — evita join de 3 níveis
-    # (link -> torneio -> loja) pra decidir a quem esta linha pertence,
-    # essencial pra RLS (BRK-306) ser performático. NOT NULL de verdade no
-    # banco (a migration adiciona nullable, faz o backfill e só depois
-    # aperta pra NOT NULL — ver migrations/versions/*_loja_id_denormalizado.py);
-    # um trigger de integridade barra loja_id divergente do torneio pai em
-    # todo INSERT/UPDATE.
     loja_id: int = Field(foreign_key="loja.id", index=True)
     torneio: Optional["Torneio"] | None = Relationship(
         back_populates="jogadores")
@@ -217,10 +182,6 @@ class Loja(LojaBase, table=True):
     # muda isso.
     status: StatusAprovacaoLoja = Field(
         sa_column=Column(Enum(StatusAprovacaoLoja)), default=StatusAprovacaoLoja.PENDENTE)
-    # BRK-305: identificador de domínio (ex.: evolutiongames.brickei.com.br)
-    # — computado a partir de `nome` na criação (ver
-    # app/api/routes/loja._gerar_slug_unico), nunca escolhido livremente
-    # pelo cliente, por isso também fora de LojaBase.
     slug: str = Field(unique=True, index=True)
 
 
@@ -257,7 +218,6 @@ class Rodada(RodadaBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     torneio_id: str = Field(
         default=None, foreign_key="torneio.id", ondelete="CASCADE")
-    # BRK-304: ver comentário equivalente em JogadorTorneioLink.loja_id.
     loja_id: int = Field(foreign_key="loja.id", index=True)
 
     jogador1: Optional["JogadorTorneioLink"] = Relationship(
@@ -301,15 +261,6 @@ class TipoJogador(TipoJogadorBase, table=True):
 
 
 # ---------------------------------- Temporada ----------------------------------
-# Temporada de jogo Pokémon (TCG/VGC/GO) — intervalo de mês/ano (sem dia,
-# ex.: setembro/2026 a agosto/2027) definido pela loja/organizador, usado
-# pra calcular a categoria de idade (Junior/Senior/Master) de um jogador
-# dentro dessa temporada: a idade considerada é a que ele completa até o
-# ÚLTIMO DIA da temporada, não a idade no início dela (ver docs/TEMPORADAS.md
-# e CategoriaUtil.py). Escopada por loja (mesmo padrão de TipoJogador) — cada
-# loja pode ter suas próprias temporadas cadastradas, já que o app não tem um
-# conceito de configuração "global" fora dos catálogos compartilhados
-# (RepresentacaoComposicao/UnidadeCatalogo).
 
 
 class TemporadaBase(SQLModel):
@@ -345,15 +296,7 @@ class TorneioBase(SQLModel):
     vagas: int = Field(default=0)
     hora_planejada: Optional[time] = Field(default=None, nullable=True)
     formato: Optional[FormatoTorneio] = Field(default=None, nullable=True)
-    # "Melhor de X" (MD1/MD3/MD5, ver FormatoMD em Enums.py) — informativo
-    # apenas: registra qual formato de partida o torneio usa, mas o sistema
-    # não modela partidas individuais dentro de uma rodada (ver
-    # docs/PARTIDAS.md) — cada rodada segue sendo uma mesa só, com um único
-    # vencedor.
     melhor_de: FormatoMD = Field(default=FormatoMD.MD1, nullable=False)
-    # Renomeado de `tcg` — nem todo torneio é de um TCG em sentido estrito
-    # (ex.: Pokémon VGC é um formato de video game), então "jogo" é o nome
-    # correto pra esse campo (ver docs/DIVIDA_TECNICA.md).
     jogo: Optional[TCG] = Field(default=TCG.POKEMON, nullable=False)
     tipo: Optional[TipoTorneio] = Field(
         default=TipoTorneio.IMPORTADO, nullable=False)
@@ -400,12 +343,6 @@ class Torneio(TorneioBase, table=True):
 
 
 # ---------------------------------- PontuacaoExtra ----------------------------------
-# Pontos avulsos dados a um jogador num torneio por um motivo fora do jogo em
-# si (trouxe um novato, atuou como juiz, etc.) — sempre somados em
-# JogadorTorneioLink.pontuacao_com_regras, nunca em pontuacao (a "crua", só
-# regra básica). Se o jogador ainda não tinha uma participação neste torneio,
-# uma é criada na hora (com tipo=JUIZ se o motivo for "Juíz" — ver
-# PontuacaoExtraService.criar_pontuacao_extra e docs/PONTUACAO_EXTRA.md).
 
 
 class PontuacaoExtraBase(SQLModel):
@@ -418,7 +355,6 @@ class PontuacaoExtraBase(SQLModel):
 class PontuacaoExtra(PontuacaoExtraBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     torneio_id: str = Field(foreign_key="torneio.id", ondelete="CASCADE")
-    # BRK-304: ver comentário equivalente em JogadorTorneioLink.loja_id.
     loja_id: int = Field(foreign_key="loja.id", index=True)
     criado_em: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -428,16 +364,6 @@ class PontuacaoExtra(PontuacaoExtraBase, table=True):
 
 
 # ---------------------------------- Evento ----------------------------------
-# Programa de pontuação de longo prazo, escopado por loja + jogo (ao contrário
-# de PontuacaoExtra, que é por torneio): jogadores são colocados num evento
-# pelo organizador/loja, acumulam pontos automaticamente (regras observando
-# os torneios FINALIZADO desse jogo/loja dentro do período do evento) ou
-# manualmente (PontosManualEvento, "Outros Motivos"), e desbloqueiam
-# recompensas ao atingir as metas (MetaEvento) cadastradas. Nada aqui é
-# armazenado como total — sempre recalculado na hora a partir de
-# JogadorTorneioLink + RegraPontuacaoEvento + PontosManualEvento (mesma
-# filosofia de nunca confiar num valor "congelado" já usada em
-# JogadorTorneioLink.pontuacao_com_regras — ver docs/EVENTOS.md).
 
 
 class EventoBase(SQLModel):
@@ -466,9 +392,6 @@ class Evento(EventoBase, table=True):
 
 class MetaEventoBase(SQLModel):
     pontos_necessarios: int
-    # Recompensa é só informativa (um balão exibido na trilha de pontos do
-    # participante ao atingir a meta) — sem imagem cadastrada, mostra o
-    # texto da descrição no lugar (ver docs/EVENTOS.md).
     recompensa_descricao: Optional[str] = Field(default=None)
     recompensa_imagem_url: Optional[str] = Field(default=None)
 
@@ -556,6 +479,7 @@ class ItemBase(SQLModel):
         default=None, nullable=False, foreign_key="categoria.id")
     preco: float = Field(default=0)
     min_quantidade: int = Field(default=0)
+    is_vendavel: bool = Field(default=True, nullable=False)
 
 
 class Item(ItemBase, table=True):
@@ -592,15 +516,6 @@ class HistoricoItem(SQLModel, table=True):
 
 class LojaJogadorLinkBase(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
-    # Única âncora de vínculo: sempre um Jogador com conta real cadastrada na
-    # plataforma (create_credito_by_id ou create_credito por game_id, que
-    # agora resolve o game_id até achar o Jogador dono e rejeita se ninguém
-    # reivindicou aquele game_id ainda). Antes existia um segundo modo
-    # (jogador_criado_id, permitindo creditar um game_id não reivindicado por
-    # ninguém) — removido: era um vetor de roubo de crédito (bastava digitar
-    # o game_id de outra pessoa pra "reservar" créditos que, ao a pessoa real
-    # se cadastrar depois, iam parar na conta dela mesmo sem ela ter pedido
-    # nada àquela loja). Ver docs/JOGADORES.md.
     jogador_id: int = Field(foreign_key="jogador.id")
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
@@ -680,11 +595,6 @@ class ItemTransacao(SQLModel, table=True):
 
 
 # ---------------------------------- Conquista ----------------------------------
-# Uma conquista é uma "família" (ex.: "Maratonista") com até 5 níveis
-# (ConquistaNivel). JogadorConquista guarda o progresso/nível atual de cada
-# jogador em cada família; HistoricoConquista guarda quando cada nível foi
-# desbloqueado (uma linha por nível conquistado, não por família).
-# Ver docs/CONQUISTAS.md para o desenho completo.
 
 
 class ConquistaBase(SQLModel):
@@ -750,20 +660,6 @@ class HistoricoConquista(HistoricoConquistaBase, table=True):
 
 
 # ---------------------------------- Composições ----------------------------------
-# Ver docs/COMPOSICAO.md para o desenho completo. Resumo: cada TCG/formato tem
-# seu próprio catálogo de "unidades" (Pokémon por enquanto — pokedex number
-# como external_id; outros jogos no futuro podem usar outro esquema de ID sem
-# precisar mudar o schema, só popular UnidadeCatalogo com outro `tcg`).
-# Renomeado de "carta"/"deck" para "unidade"/"composição" quando o Pokémon VGC
-# entrou no escopo — VGC não tem "cartas" (é um formato de video game, um time
-# de Pokémon), então os nomes antigos description davam a entender que só
-# fazia sentido pra jogos de carta. "Unidade" e "Composição" cobrem tanto uma
-# carta de TCG quanto um Pokémon de time VGC.
-# Uma "representação de composição" é um conjunto fixo de unidades (2 no caso
-# do Pokémon) usado como ícone visual do arquétipo — independente de o
-# jogador ter cadastrado a composição completa
-# (`JogadorTorneioLink.composicao_unidades`), que é a lista real de unidades
-# (com quantidade) que compõe o deck/time.
 
 class UnidadeCatalogo(SQLModel, table=True):
     __table_args__ = (
@@ -773,8 +669,6 @@ class UnidadeCatalogo(SQLModel, table=True):
     tcg: TCG = Field(index=True)
     external_id: int = Field(index=True)
     nome: str = Field(index=True)
-    # True = adicionado à mão em PokemonCatalogoService.ENTRADAS_MANUAIS, não veio
-    # do fetch mensal da PokeAPI (ver seção 3 de docs/COMPOSICAO.md).
     manual: bool = Field(default=False)
 
 
@@ -835,14 +729,6 @@ class JogadorComposicaoUnidade(JogadorComposicaoUnidadeBase, table=True):
         back_populates="composicao_unidades")
 
 
-# Composição efetivamente usada numa rodada (mesa) específica — distinta da
-# composição completa que o jogador levou pro torneio
-# (JogadorComposicaoUnidade), que nunca é alterada por isso. Pra TCG/VGC é
-# sempre uma cópia fiel do time completo, e toda rodada nova reaproveita o
-# mesmo id (nunca cria outra ComposicaoPartida) — só Pokémon GO cria uma nova
-# a cada rodada, pra permitir escolher 3 dos 6 Pokémon do time por partida.
-# Ver JOGOS_COM_COMPOSICAO_POR_PARTIDA em ComposicaoService.py e
-# docs/COMPOSICAO.md.
 class ComposicaoPartida(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     criado_em: datetime = Field(default_factory=agora_brasil)

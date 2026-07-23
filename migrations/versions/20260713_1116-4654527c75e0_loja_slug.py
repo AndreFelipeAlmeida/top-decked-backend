@@ -25,10 +25,6 @@ def upgrade() -> None:
     """Upgrade schema."""
     conn = op.get_bind()
 
-    # Passo 1: coluna nullable — defensivo (só adiciona se ainda não
-    # existir) pelo mesmo motivo de BRK-304/loja_id_denormalizado: um banco
-    # que já tinha a coluna criada por create_all() não pode tentar
-    # recriá-la.
     colunas = {c["name"] for c in sa.inspect(conn).get_columns("loja")}
     if "slug" not in colunas:
         with op.batch_alter_table("loja", schema=None) as batch_op:

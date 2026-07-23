@@ -1,16 +1,10 @@
-"""Suíte de isolamento de RLS (BRK-306) — roda contra um Postgres efêmero
-real via testcontainers (ver conftest.py), não o SQLite da suíte principal.
-PULA (skip, não falha) automaticamente se o Docker não estiver disponível
-neste ambiente — rode `docker info` pra confirmar que o daemon está de pé
-antes de esperar que esta suíte execute de verdade.
-
-Também cobre o trigger de integridade loja_id (BRK-304), que pela mesma
-razão (recurso Postgres-only: ALTER TYPE/PL-pgSQL) não é exercitado pela
-suíte principal em SQLite."""
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.engine import Engine
+from sqlmodel import Session
+
+from app.dependencies import definir_tenant_sessao
 
 
 def test_select_torneio_so_ve_dados_da_propria_loja(pg_engine: Engine, duas_lojas_com_torneio: dict):
@@ -54,13 +48,72 @@ def test_insert_com_loja_id_divergente_do_tenant_e_rejeitado(pg_engine: Engine, 
             ), {"loja_id": loja_b["loja_id"]})
 
 
+def test_leitura_publica_ve_torneios_de_todas_as_lojas(pg_engine: Engine, duas_lojas_com_torneio: dict):
+    with pg_engine.begin() as conn:
+        conn.execute(text("SET LOCAL app.leitura_publica = 'on'"))
+        torneios = conn.execute(text("SELECT id FROM torneio")).fetchall()
+
+    ids = {t.id for t in torneios}
+    assert duas_lojas_com_torneio["a"]["torneio_id"] in ids
+    assert duas_lojas_com_torneio["b"]["torneio_id"] in ids
+
+
+def test_leitura_publica_nao_afeta_pontuacaoextra(pg_engine: Engine, duas_lojas_com_torneio: dict):
+    loja_a = duas_lojas_com_torneio["a"]
+
+    with pg_engine.begin() as conn:
+        conn.execute(text("SET LOCAL app.current_loja_id = :loja_id"), {"loja_id": loja_a["loja_id"]})
+        usuario_id = conn.execute(text(
+            "INSERT INTO usuario (email, is_active, data_cadastro, tipo, senha) "
+            "VALUES ('jogador.pontuacaoextra.rls@gmail.com', true, now(), 'jogador', 'x') RETURNING id"
+        )).scalar_one()
+        jogador_id = conn.execute(text(
+            "INSERT INTO jogador (nome, usuario_id) VALUES ('Jogador PontuacaoExtra', :usuario_id) RETURNING id"
+        ), {"usuario_id": usuario_id}).scalar_one()
+        jogador_criado_id = conn.execute(text(
+            "INSERT INTO jogadorcriado (game_id, tcg, jogador_id) "
+            "VALUES ('gid-pontuacaoextra-rls', 'POKEMON', :jogador_id) RETURNING id"
+        ), {"jogador_id": jogador_id}).scalar_one()
+        conn.execute(text(
+            "INSERT INTO pontuacaoextra (jogador_criado_id, motivo, pontos, torneio_id, loja_id, criado_em) "
+            "VALUES (:jogador_criado_id, 'OUTROS', 5, :torneio_id, :loja_id, now())"
+        ), {
+            "jogador_criado_id": jogador_criado_id,
+            "torneio_id": loja_a["torneio_id"],
+            "loja_id": loja_a["loja_id"],
+        })
+
+    with pg_engine.begin() as conn:
+        conn.execute(text("SET LOCAL app.leitura_publica = 'on'"))
+        linhas = conn.execute(text("SELECT id FROM pontuacaoextra")).fetchall()
+
+    assert linhas == []
+
+
+def test_tenant_sobrevive_a_commit_intermediario_na_mesma_session(
+    pg_engine: Engine, duas_lojas_com_torneio: dict
+):
+    loja_a = duas_lojas_com_torneio["a"]
+
+    with Session(pg_engine) as session:
+        definir_tenant_sessao(session, loja_a["loja_id"])
+
+        antes = session.exec(text("SELECT id FROM torneio")).fetchall()
+        assert len(antes) == 1
+        assert antes[0].id == loja_a["torneio_id"]
+
+        # Commit intermediário — SET LOCAL da transação anterior é
+        # descartado pelo Postgres neste ponto.
+        session.commit()
+
+        depois = session.exec(text("SELECT id FROM torneio")).fetchall()
+        assert len(depois) == 1
+        assert depois[0].id == loja_a["torneio_id"]
+
+
 def test_trigger_rejeita_jogadortorneiolink_com_loja_id_divergente_do_torneio_pai(
     pg_engine: Engine, duas_lojas_com_torneio: dict
 ):
-    """BRK-304: mesmo estando dentro do tenant certo pra passar a policy de
-    RLS (loja_id da linha == tenant da sessão), o trigger de integridade
-    ainda barra se esse loja_id não bater com o loja_id do torneio
-    referenciado — as duas defesas são independentes."""
     loja_a = duas_lojas_com_torneio["a"]
     loja_b = duas_lojas_com_torneio["b"]
 

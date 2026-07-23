@@ -9,8 +9,6 @@ class JogadorTorneioLinkPublico(JogadorTorneioLinkBase):
     game_id: Optional[str]
     composicao_representacao: Optional[RepresentacaoComposicaoPublico] = None
     composicao_unidades: list[ComposicaoUnidadePublico] = Field(default_factory=list)
-    # Calculada na hora (Temporada vigente + data de nascimento do
-    # JogadorCriado) — nunca armazenada. Ver docs/TEMPORADAS.md.
     categoria: Optional[str] = None
 
 

@@ -2,7 +2,6 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi.responses import RedirectResponse
 
 from app.core.security import (
     Token, autenticar, criar_token_de_acesso, ACCESS_TOKEN_EXPIRE_MINUTES, TokenData,
@@ -64,10 +63,6 @@ async def login(
         dados=dados, delta_expiracao=access_token_expires
     )
 
-    # BRK-309: cookie transversal (Domain=.brickei.com.br em produção) é a
-    # forma primária de sessão agora — access_token no corpo da resposta
-    # continua existindo só pra clientes não-browser (scripts, mobile) que
-    # não têm como usar cookie automaticamente.
     definir_cookies_sessao(response, access_token)
 
     return Token(
@@ -80,8 +75,6 @@ async def login(
 
 @router.post("/logout")
 async def logout(response: Response):
-    """BRK-309: precisa de um endpoint de verdade porque o cookie de
-    sessão é HttpOnly — JS no frontend não consegue apagá-lo sozinho."""
     limpar_cookies_sessao(response)
     return {"detail": "Sessão encerrada."}
 
@@ -94,7 +87,11 @@ async def ler_token(
 
 @router.get("/confirmar-email")
 def confirmar_email(token: str, session: SessionDep):
-
+    # O link do e-mail agora aponta pra uma rota do FRONTEND (ver
+    # EmailService.processar_ativacao_usuario), que é quem chama este
+    # endpoint via fetch e decide navegar pro Login -- por isso aqui só
+    # retorna JSON, nunca mais um RedirectResponse (que jogava o browser
+    # direto pra Home, sem o toast de sucesso nem a tela de Login).
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload["sub"]
@@ -110,7 +107,7 @@ def confirmar_email(token: str, session: SessionDep):
     usuario.is_active = True
     session.commit()
 
-    return RedirectResponse(url=settings.FRONTEND_URL, status_code=302)
+    return {"detail": "E-mail confirmado com sucesso."}
 
 
 @router.post("/esqueci-senha")

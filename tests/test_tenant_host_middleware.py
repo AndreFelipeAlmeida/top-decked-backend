@@ -1,9 +1,3 @@
-"""Testes do TenantHostMiddleware (BRK-307). O middleware roda fora da
-injeção de dependência do FastAPI (é ASGI puro, ver módulo docstring da
-implementação), então não enxerga `app.dependency_overrides` — os testes
-montam uma instância isolada do middleware com `session_factory` apontando
-pro banco de teste (fixture `session`), em vez de reusar `app.main.app`
-(que aponta pro engine real)."""
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from sqlmodel import Session

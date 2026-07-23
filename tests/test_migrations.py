@@ -1,15 +1,3 @@
-"""Garante que migrations/versions/ representa fielmente o schema atual de
-app.models — roda alembic upgrade head num banco descartável e usa
-`alembic check` (Alembic 1.9+) pra detectar drift entre os models e a
-última migration. Se este teste falhar, alguém mudou um model sem gerar a
-migration correspondente: rode `alembic revision --autogenerate -m "..."`
-e commite o arquivo novo em migrations/versions/ (ver docs/MIGRACOES.md).
-
-Existir esse teste dentro da MESMA suíte que já roda em todo PR/push (ver
-.github/workflows/backend-ci.yml) é o que faz esse gate valer de verdade
-pra CI/CD — sem precisar de nenhuma ferramenta nova, só reaproveitando o
-pytest que já é o portão de qualidade do projeto."""
-
 from pathlib import Path
 
 from alembic import command
@@ -33,16 +21,6 @@ def test_migrations_head_matches_models(monkeypatch, tmp_path):
 
 
 def test_migration_corrige_tipo_jogador_id_legado(monkeypatch, tmp_path):
-    """Regressão: a migration baseline (a5f913d8cd90) já cria
-    `jogadortorneiolink` com `regra_extra_id` (o rename de `tipo_jogador_id`
-    — ver docs/REGRA_EXTRA.md — aconteceu num edit direto do model, ANTES do
-    Alembic existir no projeto), então ela nunca testava o caminho de um
-    banco que já existia antes dessa rodada, com a coluna antiga de
-    verdade. A migration f0256c9944ef existe só pra cobrir esse caso — este
-    teste simula um banco "legado" (upgrade até antes do fix, coluna
-    renomeada manualmente de volta pro nome antigo) e confirma que
-    `alembic upgrade head` conserta e `alembic check` não acusa divergência
-    depois."""
     import sqlalchemy as sa
     from app.core.config import settings
 
@@ -108,11 +86,6 @@ def test_migration_corrige_coluna_tipo_ausente(monkeypatch, tmp_path):
 
 
 def test_migration_backfill_slug_resolve_colisao_de_nomes_duplicados(monkeypatch, tmp_path):
-    """BRK-305: bancos existentes (produção) precisam de um slug pra cada
-    loja já cadastrada, e nomes de loja não são únicos — duas lojas
-    chamadas "Loja Repetida" cadastradas ANTES desta migration existir
-    precisam terminar com slugs distintos (sufixo numérico determinístico),
-    nunca colidindo nem ficando NULL."""
     import sqlalchemy as sa
     from app.core.config import settings
 

@@ -22,11 +22,6 @@ SECRET_KEY = settings.SECURITY_SECRET_KEY
 ALGORITHM = settings.SECURITY_ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = int(settings.SECURITY_TOKEN_EXPIRATION)
 
-# BRK-309: auto_error=False porque o header Authorization agora é só o
-# fallback — o token normalmente chega via cookie (ver
-# app.dependencies.retornar_usuario_atual). Sem isso, o próprio
-# OAuth2PasswordBearer já levantaria 401 antes da rota conseguir checar o
-# cookie, quebrando quem só manda cookie (todo browser, depois do login).
 OAUTH2_SCHEME = OAuth2PasswordBearer(tokenUrl="login/token", auto_error=False)
 PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -35,34 +30,6 @@ COOKIE_CSRF_TOKEN = "csrf_token"
 
 
 def _cookie_domain() -> str | None:
-    # Domain=.{ROOT_DOMAIN} (o ponto é vital — permite todos os
-    # subdomínios lerem o cookie, ver BRK-309) só faz sentido quando existe
-    # de verdade um domínio raiz compartilhado por trás.
-    #
-    # Testar multi-tenancy por subdomínio localmente (ex.:
-    # evolutiongames.localtest.me) exige ROOT_DOMAIN=localtest.me no .env —
-    # nesse caso o cookie PRECISA do Domain=.localtest.me pra ser
-    # compartilhado entre localtest.me e evolutiongames.localtest.me,
-    # mesmo em DEBUG. Usamos localtest.me (não "localhost") de propósito:
-    # browsers baseados em Chromium não compartilham um cookie com
-    # Domain=.localhost entre subdomínios (confirmado na prática — "localhost"
-    # não tem uma "registrable domain" reconhecida, então o Set-Cookie com
-    # Domain=.localhost simplesmente não é enviado de volta em requisições
-    # pra {slug}.localhost, mesmo a resolução DNS de *.localhost funcionando
-    # normalmente). localtest.me é um domínio público de verdade, mantido só
-    # pra isso, cujos subdomínios resolvem todos pra 127.0.0.1 — por ter uma
-    # registrable domain real, o cookie é compartilhado entre subdomínios
-    # dele igual em produção. "localhost"/"127.0.0.1" continuam aceitos aqui
-    # por compatibilidade, mas não resolvem o cross-subdomínio de verdade.
-    #
-    # Já o caso comum de dev local SEM testar subdomínio (ROOT_DOMAIN
-    # continua "brickei.com.br", mas o browser está em "localhost") não
-    # pode emitir Domain=.brickei.com.br — o browser REJEITA um Set-Cookie
-    # cujo Domain não é sufixo do host atual, e o cookie nunca seria
-    # setado. Por isso o fallback pra None (cookie preso ao host exato,
-    # sempre válido pra qualquer host) continua sendo o comportamento em
-    # DEBUG quando ROOT_DOMAIN não foi explicitamente apontado pra um dos
-    # domínios de teste de subdomínio acima.
     if settings.ROOT_DOMAIN in ("localhost", "127.0.0.1", "localtest.me"):
         return f".{settings.ROOT_DOMAIN}"
     return None if settings.DEBUG else f".{settings.ROOT_DOMAIN}"
@@ -123,9 +90,6 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     tipo: str | None = None
-    # BRK-308: só preenchido pra tipo="loja" — o frontend usa isso pra
-    # redirecionar o Dono de Loja direto pro subdomínio dela depois do
-    # login, sem precisar de um segundo request só pra descobrir o slug.
     slug: str | None = None
 
 

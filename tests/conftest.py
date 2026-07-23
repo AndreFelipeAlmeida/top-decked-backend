@@ -13,27 +13,11 @@ from app.core.config import settings
 
 @pytest.fixture(autouse=True)
 def _root_domain_padrao_de_teste(monkeypatch):
-    """A suíte não pode depender do ROOT_DOMAIN do .env de quem está rodando
-    os testes — um dev testando multi-tenancy por subdomínio manualmente
-    (ver docs/tcc/MULTI_TENANCY.md) normalmente deixa ROOT_DOMAIN=localhost
-    no .env, o que faria TODO cookie de sessão emitido durante os testes
-    sair com Domain=.localhost. O TestClient usa Host "testserver" por
-    padrão, que não bate com esse Domain, então o cookie jar (que segue as
-    mesmas regras de um browser real) rejeita silenciosamente o cookie — e
-    a suíte inteira de cookie/CSRF quebra de um jeito muito difícil de
-    diagnosticar, sem nenhuma relação óbvia com o .env local. Fixado aqui
-    pra cada teste começar sempre do mesmo valor, independente do ambiente
-    de quem roda; testes que precisam de outro ROOT_DOMAIN usam
-    monkeypatch pra sobrescrever de novo dentro de si mesmos."""
     monkeypatch.setattr(settings, "ROOT_DOMAIN", "brickei.com.br")
 
 
 @pytest.fixture(name="session")
 def session_fixture():
-    """Um banco SQLite em memória, novo e isolado, por teste — substitui o
-    banco único compartilhado (tests/db/test.db) que fazia os testes
-    dependerem de estado deixado por execuções anteriores (ver
-    docs/DIVIDA_TECNICA.md item 25)."""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

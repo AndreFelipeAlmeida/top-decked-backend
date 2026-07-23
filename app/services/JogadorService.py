@@ -20,28 +20,35 @@ def posicao_do_jogador(ranking: list, jogador_id: int):
     return None
 
 
-def calcular_estatisticas(session: SessionDep, jogador: Jogador):
-    estat_por_mes = _retornar_estatisticas_mensais(session, jogador.id)
+def calcular_estatisticas(
+    session: SessionDep, jogador: Jogador, loja_id: int | None = None, tcg: str | None = None,
+):
+    estat_por_mes = _retornar_estatisticas_mensais(session, jogador.id, loja_id, tcg)
     # Um jogador só tem UMA linha de JogadorTorneioLink por torneio (fonte
     # única de verdade — ver TipoParticipanteTorneio.JOGADOR_E_JUIZ), então
     # essa contagem já não precisa de deduplicação nenhuma.
-    torneios_links = session.exec(select(JogadorTorneioLink)
-                                  .join(Torneio)
-                                  .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
-                                  .where(
-                                      (Torneio.status == StatusTorneio.FINALIZADO) &
-                                      (JogadorCriado.jogador_id == jogador.id))).all()
+    query_torneios_links = (select(JogadorTorneioLink)
+                            .join(Torneio)
+                            .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
+                            .where(
+                                (Torneio.status == StatusTorneio.FINALIZADO) &
+                                (JogadorCriado.jogador_id == jogador.id)))
+    if loja_id is not None:
+        query_torneios_links = query_torneios_links.where(Torneio.loja_id == loja_id)
+    if tcg is not None:
+        query_torneios_links = query_torneios_links.where(Torneio.jogo == tcg)
+    torneios_links = session.exec(query_torneios_links).all()
 
     torneio_totais = len(torneios_links)
     torneios_historico = _retornar_estatisticas_torneio(
         session, jogador, torneios_links)
-    taxa_vitoria = calcular_taxa_vitoria(session, jogador)
-    rank_geral = posicao_do_jogador(calcula_ranking_geral(session), jogador.id)
+    taxa_vitoria = calcular_taxa_vitoria(session, jogador, loja_id=loja_id, tcg=tcg)
+    rank_geral = posicao_do_jogador(calcula_ranking_geral(session, loja_id=loja_id, tcg=tcg), jogador.id)
     rank_mensal = posicao_do_jogador(calcula_ranking_geral(
-        session, mes=data_agora_brasil().month), jogador.id)
+        session, mes=data_agora_brasil().month, loja_id=loja_id, tcg=tcg), jogador.id)
     rank_anual = posicao_do_jogador(calcula_ranking_geral(
-        session, ano=data_agora_brasil().year), jogador.id)
-    vde = retornar_vde_jogador_finalizados(session, jogador.id)
+        session, ano=data_agora_brasil().year, loja_id=loja_id, tcg=tcg), jogador.id)
+    vde = retornar_vde_jogador_finalizados(session, jogador.id, loja_id=loja_id, tcg=tcg)
 
     return {"estatisticas_anuais": estat_por_mes,
             "torneio_totais": torneio_totais,
@@ -71,21 +78,30 @@ def _retornar_estatisticas_torneio(session: SessionDep, jogador: Jogador,
     return estatisticas
 
 
-def _retornar_estatisticas_mensais(session: SessionDep, jogador_id: str):
-    rodadas = session.exec(
-        select(Rodada).join(Torneio).where(
-            (Torneio.status == StatusTorneio.FINALIZADO) &
-            ((Rodada.jogador1_id == jogador_id) |
-             (Rodada.jogador2_id == jogador_id))
-        )
-    ).all()
-    links = session.exec(
+def _retornar_estatisticas_mensais(
+    session: SessionDep, jogador_id: str, loja_id: int | None = None, tcg: str | None = None,
+):
+    query_rodadas = select(Rodada).join(Torneio).where(
+        (Torneio.status == StatusTorneio.FINALIZADO) &
+        ((Rodada.jogador1_id == jogador_id) |
+         (Rodada.jogador2_id == jogador_id))
+    )
+    query_links = (
         select(JogadorTorneioLink)
         .join(Torneio)
         .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
         .where((Torneio.status == StatusTorneio.FINALIZADO) &
                (JogadorCriado.jogador_id == jogador_id))
-    ).all()
+    )
+    if loja_id is not None:
+        query_rodadas = query_rodadas.where(Torneio.loja_id == loja_id)
+        query_links = query_links.where(Torneio.loja_id == loja_id)
+    if tcg is not None:
+        query_rodadas = query_rodadas.where(Torneio.jogo == tcg)
+        query_links = query_links.where(Torneio.jogo == tcg)
+
+    rodadas = session.exec(query_rodadas).all()
+    links = session.exec(query_links).all()
 
     estatisticas = defaultdict(
         lambda: {"pontos": 0, "vitorias": 0, "derrotas": 0, "empates": 0})
@@ -214,30 +230,59 @@ def retornar_historico_jogador(session: SessionDep, jogador: Jogador):
     return list(oponentes_salvos.values())
 
 
-def retornar_vde_jogador(session: SessionDep, jogador_id: str, torneio: Torneio | None = None):
-    consulta = select(Rodada).where((Rodada.jogador1_id == jogador_id)
-                                    | (Rodada.jogador2_id == jogador_id))
+def _links_do_jogador(
+    session: SessionDep,
+    jogador_id: int,
+    loja_id: int | None = None,
+    tcg: str | None = None,
+    torneio_id: str | None = None,
+) -> List["JogadorTorneioLink"]:
+    query = (
+        select(JogadorTorneioLink)
+        .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
+        .where(JogadorCriado.jogador_id == jogador_id)
+    )
+    if torneio_id is not None or loja_id is not None or tcg is not None:
+        query = query.join(Torneio, Torneio.id == JogadorTorneioLink.torneio_id)
+        if torneio_id is not None:
+            query = query.where(Torneio.id == torneio_id)
+        if loja_id is not None:
+            query = query.where(Torneio.loja_id == loja_id)
+        if tcg is not None:
+            query = query.where(Torneio.jogo == tcg)
+    return session.exec(query).all()
 
-    if torneio:
-        consulta = consulta.where(Rodada.torneio_id == torneio.id)
 
-    rodadas = session.exec(consulta).all()
-
+def retornar_vde_jogador(session: SessionDep, jogador_id: int | None, torneio: Torneio | None = None):
     vde = {
         "vitorias": 0,
         "derrotas": 0,
         "empates": 0
     }
-    for rodada in rodadas:
+
+    if not isinstance(jogador_id, int):
+        return vde
+
+    links = _links_do_jogador(session, jogador_id, torneio_id=torneio.id if torneio else None)
+    link_ids = {link.id for link in links}
+    if not link_ids:
+        return vde
+
+    consulta = select(Rodada).where(
+        Rodada.jogador1_id.in_(link_ids) | Rodada.jogador2_id.in_(link_ids)
+    )
+    if torneio:
+        consulta = consulta.where(Rodada.torneio_id == torneio.id)
+
+    for rodada in session.exec(consulta).all():
         if not rodada.finalizada:
             continue
 
-        oponente = _descobrir_oponente(rodada, jogador_id)
-
-        if rodada.vencedor == oponente:
-            vde["derrotas"] += 1
-        elif rodada.vencedor == jogador_id:
+        meu_link_id = rodada.jogador1_id if rodada.jogador1_id in link_ids else rodada.jogador2_id
+        if rodada.vencedor_id == meu_link_id:
             vde["vitorias"] += 1
+        elif rodada.vencedor_id is not None:
+            vde["derrotas"] += 1
         else:
             vde["empates"] += 1
 
@@ -276,32 +321,50 @@ def retornar_todas_rodadas(session: SessionDep, jogador: Jogador):
     return result
 
 
-def retornar_vde_jogador_finalizados(session: SessionDep, jogador_id: str, torneio: Torneio | None = None):
-    consulta = select(Rodada).join(Torneio).where(
-        (Torneio.status == StatusTorneio.FINALIZADO) &
-        (Rodada.jogador1_id == jogador_id) |
-        (Rodada.jogador2_id == jogador_id))
-
-    if torneio:
-        consulta = consulta.where(Rodada.torneio_id == torneio.id)
-
-    rodadas = session.exec(consulta).all()
-
+def retornar_vde_jogador_finalizados(
+    session: SessionDep,
+    jogador_id: int | None,
+    torneio: Torneio | None = None,
+    loja_id: int | None = None,
+    tcg: str | None = None,
+):
     vde = {
         "vitorias": 0,
         "derrotas": 0,
         "empates": 0
     }
-    for rodada in rodadas:
+
+    if not isinstance(jogador_id, int):
+        return vde
+
+    links = _links_do_jogador(
+        session, jogador_id, loja_id=loja_id, tcg=tcg,
+        torneio_id=torneio.id if torneio else None,
+    )
+    link_ids = {link.id for link in links}
+    if not link_ids:
+        return vde
+
+    consulta = select(Rodada).join(Torneio).where(
+        (Torneio.status == StatusTorneio.FINALIZADO) &
+        (Rodada.jogador1_id.in_(link_ids) | Rodada.jogador2_id.in_(link_ids))
+    )
+    if torneio:
+        consulta = consulta.where(Rodada.torneio_id == torneio.id)
+    if loja_id is not None:
+        consulta = consulta.where(Torneio.loja_id == loja_id)
+    if tcg is not None:
+        consulta = consulta.where(Torneio.jogo == tcg)
+
+    for rodada in session.exec(consulta).all():
         if not rodada.finalizada:
             continue
 
-        oponente = _descobrir_oponente(rodada, jogador_id)
-
-        if rodada.vencedor == oponente:
-            vde["derrotas"] += 1
-        elif rodada.vencedor == jogador_id:
+        meu_link_id = rodada.jogador1_id if rodada.jogador1_id in link_ids else rodada.jogador2_id
+        if rodada.vencedor_id == meu_link_id:
             vde["vitorias"] += 1
+        elif rodada.vencedor_id is not None:
+            vde["derrotas"] += 1
         else:
             vde["empates"] += 1
 
@@ -309,14 +372,6 @@ def retornar_vde_jogador_finalizados(session: SessionDep, jogador_id: str, torne
 
 
 def contar_impacto_troca_gameid(session: SessionDep, jogador_id: int, tcg: TCG, gameid_atual: str) -> int:
-    """Quantos torneios importados o jogador perde a atribuição se deixar de
-    usar `gameid_atual` para este TCG — conta em cima do JogadorCriado que
-    hoje carrega esse game_id/tcg (ver desvincular_gameid_antigo). Como todo
-    torneio importado aponta pro JogadorCriado (nunca pro Jogador direto), a
-    contagem é só "quantos vínculos existem nele", sem precisar casar por
-    string. Não conta mais créditos de loja: LojaJogadorLink agora só aponta
-    pra jogador_id (conta real), nunca pro JogadorCriado/game_id — trocar de
-    Game ID não afeta créditos de jeito nenhum (ver docs/JOGADORES.md)."""
     jogador_criado_atual = session.exec(
         select(JogadorCriado).where(
             (JogadorCriado.jogador_id == jogador_id) &

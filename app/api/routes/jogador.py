@@ -1,6 +1,6 @@
 from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
-from fastapi import APIRouter, Depends, UploadFile, File, Request, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Query
 from sqlmodel import select
 from app.schemas.Jogador import JogadorCompleto, JogadorPublico, JogadorUpdate, JogadorCriar, JogadorLojaPublico, PaginatedJogadores, ImpactoTrocaGameIdPublico
 from app.core.db import SessionDep
@@ -14,7 +14,7 @@ from app.services.JogadorService import vincular_historico_e_creditos, calcular_
 from app.services.ConquistaService import recalcular_conquistas_jogador
 from app.utils.datetimeUtil import data_agora_brasil
 from app.services.EmailService import processar_ativacao_usuario
-from app.dependencies import retornar_jogador_atual, retornar_loja_atual
+from app.dependencies import retornar_jogador_atual, retornar_loja_atual, contexto_dominio, permitir_leitura_publica
 import os
 
 
@@ -24,7 +24,7 @@ router = APIRouter(
 
 
 @router.post("/", response_model=JogadorPublico)
-async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Request):
+async def create_jogador(jogador: JogadorCriar, session: SessionDep):
     verificar_novo_usuario(jogador.email, session)
     novo_usuario = Usuario(
         email=jogador.email,
@@ -41,7 +41,7 @@ async def create_jogador(jogador: JogadorCriar, session: SessionDep, request: Re
         usuario=novo_usuario,
     )
 
-    await processar_ativacao_usuario(db_jogador.usuario, request)
+    await processar_ativacao_usuario(db_jogador.usuario)
 
     session.add(db_jogador)
     session.commit()
@@ -85,15 +85,30 @@ def retornar_meu_jogador(
 
 @router.get("/estatisticas")
 def get_estatisticas(session: SessionDep,
-                     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+                     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+                     _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
+                     loja_id: Annotated[int | None, Depends(contexto_dominio)] = None,
+                     tcg: str | None = None):
     jogador = session.get(Jogador, token_data.id)
 
-    return calcular_estatisticas(session, jogador)
+    # dashboard do jogador filtra tudo pela loja do subdomínio
+    # atual (contexto_dominio, resolvido pelo Host via TenantHostMiddleware)
+    # — None no domínio raiz mantém as estatísticas globais de sempre.
+    # tcg (query param opcional, mandado pelo front conforme o
+    # jogo selecionado na barra lateral) filtra por jogo — None ("Todos os
+    # jogos") agrega todos os TCGs.
+    #
+    # permitir_leitura_publica: as estatísticas agregam rodada/jogadortorneiolink
+    # de TODAS as lojas em que o jogador já participou, não só uma — sem o
+    # bypass, a policy de RLS ficaria fail-closed nesta transação sem tenant
+    # único (ver dependencies.py).
+    return calcular_estatisticas(session, jogador, loja_id=loja_id, tcg=tcg)
 
 
 @router.get("/rodadas")
 def retornar_rodadas(session: SessionDep,
-                     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+                     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+                     _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)]):
     jogador = session.get(Jogador, token_data.id)
 
     return retornar_todas_rodadas(session, jogador)
@@ -120,7 +135,8 @@ def get_jogadores_por_loja(session: SessionDep, token_data: Annotated[TokenData,
 
 @router.get("/historico")
 def retornar_historico(session: SessionDep,
-                       token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+                       token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+                       _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)]):
     jogador = session.get(Jogador, token_data.id)
 
     return retornar_historico_jogador(session, jogador)
@@ -131,13 +147,8 @@ def get_impacto_troca_gameid(
     session: SessionDep,
     tcg: TCG,
     token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+    _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
 ):
-    """Quantos torneios importados o jogador perde a atribuição se trocar o
-    GameID atual deste TCG por outro — usado pelo aviso de confirmação na tela
-    de perfil antes de uma troca de verdade acontecer. Não inclui mais
-    créditos de loja: LojaJogadorLink aponta direto pra jogador_id (conta
-    real), então trocar de Game ID nunca afeta créditos (ver
-    docs/JOGADORES.md)."""
     gameid_atual = session.exec(
         select(JogadorCriado).where(
             (JogadorCriado.jogador_id == token_data.id) & (JogadorCriado.tcg == tcg)
@@ -281,7 +292,8 @@ def delete_usuario(session: SessionDep,
 
 @router.get("/torneios/inscritos")
 def torneios_inscritos(session: SessionDep,
-                       token_data: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+                       token_data: Annotated[TokenData, Depends(retornar_jogador_atual)],
+                       _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)]):
     jogador = session.get(Jogador, token_data.id)
 
     inscricoes = session.exec(

@@ -60,11 +60,6 @@ def create_credito(
     session: SessionDep,
     loja: Annotated[TokenData, Depends(retornar_loja_atual)]
 ):
-    # Resolve o game_id só pra achar QUEM é o jogador — o crédito em si nunca
-    # fica preso a um game_id/JogadorCriado sem conta (ver docs/JOGADORES.md).
-    # Sem essa exigência, bastaria alguém digitar o game_id de outra pessoa
-    # pra "reservar" créditos que, quando o dono de verdade se cadastrasse
-    # depois, cairiam na conta dele mesmo sem ele ter pedido nada a esta loja.
     jogador_criado = session.exec(
         select(JogadorCriado).where(
             (JogadorCriado.tcg == credito_create.game_id.tcg) &
@@ -115,8 +110,6 @@ def create_credito(
 
 @router.get("/jogador", response_model=List[CreditoJogador])
 def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, Depends(retornar_jogador_atual)]):
-    # jogador_id é a única âncora agora (ver docs/JOGADORES.md) — não há mais
-    # crédito preso a um JogadorCriado sem conta pra "herdar" ao se cadastrar.
     creditos = session.exec(
         select(LojaJogadorLink, Loja)
         .join(Loja, Loja.id == LojaJogadorLink.loja_id)
@@ -135,6 +128,7 @@ def get_creditos_by_jogador(session: SessionDep, jogador: Annotated[TokenData, D
         credito_data["endereco"] = loja.endereco or ""
         tcgs = jogador_atual.tcgs if jogador_atual else []
         credito_data["jogador"] = {
+            "nome": jogador_atual.nome if jogador_atual else "",
             "tcgs": [JogadorCriadoPublico.model_validate(t, from_attributes=True) for t in tcgs]
         }
         creditos_formatados.append(credito_data)

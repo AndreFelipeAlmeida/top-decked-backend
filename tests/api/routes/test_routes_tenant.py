@@ -1,10 +1,3 @@
-"""Testes de GET /tenant/atual (BRK-308): o endpoint público que o
-frontend consulta no boot da SPA pra saber em qual loja (se alguma) o
-subdomínio atual está travado. Igual a test_tenant_host_middleware.py, o
-caso de subdomínio conhecido precisa de uma app isolada com
-`TenantHostMiddleware` apontando pro banco de teste via `session_factory`
-— o middleware roda fora da injeção de dependência do FastAPI, então não
-enxerga `app.dependency_overrides` do `client`/`session` compartilhados."""
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlmodel import Session

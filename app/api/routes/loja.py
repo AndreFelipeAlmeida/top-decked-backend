@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Request
+from fastapi import APIRouter, Depends, UploadFile, File
 import os
 from typing import Annotated
 from sqlalchemy import func
@@ -23,9 +23,6 @@ router = APIRouter(
 
 
 def _gerar_slug_unico(session: SessionDep, nome: str) -> str:
-    """Resolve colisão com um sufixo numérico determinístico (BRK-305) —
-    "Evolution Games" e outra loja chamada igual não podem colidir no
-    mesmo subdomínio."""
     base = slugify(nome)
     slug = base
     sufixo = 2
@@ -36,7 +33,7 @@ def _gerar_slug_unico(session: SessionDep, nome: str) -> str:
 
 
 @router.post("/", response_model=LojaPublico)
-async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
+async def criar_loja(loja: LojaCriar, session: SessionDep):
     verificar_novo_usuario(loja.email, session)
 
     novo_usuario = Usuario(
@@ -59,7 +56,7 @@ async def criar_loja(loja: LojaCriar, session: SessionDep, request: Request):
         usuario=novo_usuario
     )
 
-    await processar_ativacao_usuario(db_loja.usuario, request)
+    await processar_ativacao_usuario(db_loja.usuario)
 
     session.add(db_loja)
     session.commit()
@@ -76,9 +73,6 @@ def retornar_lojas(
     session: SessionDep,
     token_data: Annotated[TokenData | None, Depends(retornar_usuario_atual_opcional)] = None,
 ):
-    # BRK-403: página de diretório é pública, mas só faz sentido divulgar
-    # lojas já aprovadas — PENDENTE/REJEITADA não são "descobríveis"
-    # publicamente (a própria loja não tem nem subdomínio funcional ainda).
     lojas = session.exec(select(Loja).where(Loja.status == StatusAprovacaoLoja.APROVADA)).all()
 
     # Cross-referência com os vínculos do próprio jogador (se logado) pra

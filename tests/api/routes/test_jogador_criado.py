@@ -4,7 +4,7 @@ loja/torneio faz com um jogador que pode ainda não ter conta registrada na
 plataforma — cadastro manual pela loja, import de .tdf, reivindicação
 retroativa quando um jogador real registra o mesmo Game ID, e a consequência
 direta de tudo isso: ranking e créditos precisam mostrar esses jogadores
-mesmo sem conta (ver docs/JOGADORES.md)."""
+mesmo sem conta."""
 
 from fastapi.testclient import TestClient
 
@@ -18,7 +18,7 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
+    # Login agora tambem seta cookies de sessao no TestClient (que
     # mantem um cookie jar persistente, como um browser de verdade) -- sem
     # limpar aqui, chamadas seguintes que passam Authorization no header
     # explicitamente ainda carregariam o cookie da ULTIMA conta logada
@@ -26,7 +26,7 @@ def _login(client: TestClient, email: str, senha: str) -> str:
     # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
     # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
     # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
+    # depender só do header, como antes.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -137,7 +137,7 @@ def test_loja_creditar_game_id_sem_conta_registrada_e_rejeitado(client: TestClie
     permitiria que qualquer pessoa digitasse o game_id de outra pessoa pra
     "reservar" créditos que iriam parar na conta dela quando ela se
     cadastrasse — sem ela ter pedido nada a esta loja. LojaJogadorLink só
-    aceita jogador_id de uma conta real (ver docs/JOGADORES.md)."""
+    aceita jogador_id de uma conta real."""
     _, token = _criar_loja_autenticada(client, "Loja A", "loja.a@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -424,3 +424,149 @@ def test_estatisticas_nao_conta_torneio_duas_vezes_para_juiz_e_jogador(client: T
     assert body["torneio_totais"] == 1
     assert len(body["historico"]) == 1
     assert body["historico"][0]["pontuacao"] == 8
+
+
+def test_estatisticas_filtra_por_loja_quando_em_subdominio(client: TestClient, session: Session) -> None:
+    """O dashboard do jogador só conta os torneios da loja do
+    subdomínio atual quando existe um tenant (contexto_dominio, resolvido
+    pelo Host via TenantHostMiddleware) — no domínio raiz, continua
+    contando tudo (todas as lojas), como sempre."""
+    from app.dependencies import contexto_dominio
+
+    _, token_loja_a = _criar_loja_autenticada(client, "Loja Estatisticas A", "loja.estatisticasA@gmail.com")
+    headers_loja_a = {"Authorization": f"Bearer {token_loja_a}"}
+    regra_a = _criar_regra(client, headers_loja_a)
+    torneio_a = _criar_torneio(client, headers_loja_a, regra_a["id"])
+
+    _, token_loja_b = _criar_loja_autenticada(client, "Loja Estatisticas B", "loja.estatisticasB@gmail.com")
+    headers_loja_b = {"Authorization": f"Bearer {token_loja_b}"}
+    regra_b = _criar_regra(client, headers_loja_b)
+    torneio_b = _criar_torneio(client, headers_loja_b, regra_b["id"])
+
+    jogador, token_jogador = _criar_jogador_autenticado(client, "Multi Loja", "multiloja.estatisticas@gmail.com")
+    headers_jogador = {"Authorization": f"Bearer {token_jogador}"}
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"tcgs": [{"tcg": "POKEMON", "id": "gid-multiloja"}]},
+        headers=headers_jogador,
+    )
+    assert r.status_code == 200, r.text
+    jogador_criado_id = r.json()["tcgs"][0]["id"]
+
+    session.add(JogadorTorneioLink(
+        torneio_id=torneio_a["id"], loja_id=torneio_a["loja"]["id"], jogador_criado_id=jogador_criado_id,
+        apelido="Multi Loja", tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=10,
+    ))
+    session.add(JogadorTorneioLink(
+        torneio_id=torneio_b["id"], loja_id=torneio_b["loja"]["id"], jogador_criado_id=jogador_criado_id,
+        apelido="Multi Loja", tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=20,
+    ))
+    session.commit()
+
+    r = client.put(f"/api/lojas/torneios/{torneio_a['id']}/finalizar", headers=headers_loja_a)
+    assert r.status_code == 200, r.text
+    r = client.put(f"/api/lojas/torneios/{torneio_b['id']}/finalizar", headers=headers_loja_b)
+    assert r.status_code == 200, r.text
+
+    # Domínio raiz (sem tenant): conta os dois torneios, de ambas as lojas.
+    r = client.get("/api/jogadores/estatisticas", headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    assert r.json()["torneio_totais"] == 2
+
+    # Subdomínio da Loja A: só conta o torneio dela.
+    client.app.dependency_overrides[contexto_dominio] = lambda: torneio_a["loja"]["id"]
+    r = client.get("/api/jogadores/estatisticas", headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["torneio_totais"] == 1
+    assert body["historico"][0]["id"] == torneio_a["id"]
+
+
+def test_estatisticas_filtra_por_tcg_selecionado(client: TestClient, session: Session) -> None:
+    """?tcg= filtra as estatísticas do dashboard do jogador pelo
+    jogo selecionado na barra lateral — sem o parâmetro (estado "Todos os
+    jogos"), continua agregando todos os TCGs."""
+    _, token_loja = _criar_loja_autenticada(client, "Loja Estatisticas TCG", "loja.estatisticastcg@gmail.com")
+    headers_loja = {"Authorization": f"Bearer {token_loja}"}
+
+    regra_pokemon = client.post(
+        "/api/lojas/tipoJogador/",
+        json={
+            "nome": "Regra Pokemon", "pt_vitoria": 3, "pt_derrota": 0, "pt_empate": 1,
+            "pt_oponente_ganha": 2, "pt_oponente_perde": -1, "pt_oponente_empate": 0, "tcg": "POKEMON",
+        },
+        headers=headers_loja,
+    ).json()
+    regra_vgc = client.post(
+        "/api/lojas/tipoJogador/",
+        json={
+            "nome": "Regra VGC", "pt_vitoria": 3, "pt_derrota": 0, "pt_empate": 1,
+            "pt_oponente_ganha": 2, "pt_oponente_perde": -1, "pt_oponente_empate": 0, "tcg": "POKEMON_VGC",
+        },
+        headers=headers_loja,
+    ).json()
+
+    torneio_pokemon = client.post(
+        "/api/lojas/torneios/criar",
+        json={
+            "data_planejada": "2026-08-01", "jogo": "POKEMON", "formato": "PADRAO",
+            "vagas": 8, "regra_basica_id": regra_pokemon["id"],
+        },
+        headers=headers_loja,
+    ).json()
+    torneio_vgc = client.post(
+        "/api/lojas/torneios/criar",
+        json={
+            "data_planejada": "2026-08-01", "jogo": "POKEMON_VGC", "formato": "PADRAO",
+            "vagas": 8, "regra_basica_id": regra_vgc["id"],
+        },
+        headers=headers_loja,
+    ).json()
+
+    jogador, token_jogador = _criar_jogador_autenticado(client, "Multi TCG", "multitcg.estatisticas@gmail.com")
+    headers_jogador = {"Authorization": f"Bearer {token_jogador}"}
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"tcgs": [{"tcg": "POKEMON", "id": "gid-multitcg-pkm"}, {"tcg": "POKEMON_VGC", "id": "gid-multitcg-vgc"}]},
+        headers=headers_jogador,
+    )
+    assert r.status_code == 200, r.text
+    tcgs_por_jogo = {t["tcg"]: t["id"] for t in r.json()["tcgs"]}
+
+    session.add(JogadorTorneioLink(
+        torneio_id=torneio_pokemon["id"], loja_id=torneio_pokemon["loja"]["id"],
+        jogador_criado_id=tcgs_por_jogo["POKEMON"],
+        apelido="Multi TCG", tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=10,
+    ))
+    session.add(JogadorTorneioLink(
+        torneio_id=torneio_vgc["id"], loja_id=torneio_vgc["loja"]["id"],
+        jogador_criado_id=tcgs_por_jogo["POKEMON_VGC"],
+        apelido="Multi TCG", tipo="JOGADOR", pontuacao=0, pontuacao_com_regras=20,
+    ))
+    session.commit()
+
+    r = client.put(f"/api/lojas/torneios/{torneio_pokemon['id']}/finalizar", headers=headers_loja)
+    assert r.status_code == 200, r.text
+    r = client.put(f"/api/lojas/torneios/{torneio_vgc['id']}/finalizar", headers=headers_loja)
+    assert r.status_code == 200, r.text
+
+    # "Todos os jogos" (sem ?tcg=): conta os dois.
+    r = client.get("/api/jogadores/estatisticas", headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    assert r.json()["torneio_totais"] == 2
+
+    # Só Pokémon TCG.
+    r = client.get("/api/jogadores/estatisticas", params={"tcg": "POKEMON"}, headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["torneio_totais"] == 1
+    assert body["historico"][0]["id"] == torneio_pokemon["id"]
+
+    # Só Pokémon VGC.
+    r = client.get("/api/jogadores/estatisticas", params={"tcg": "POKEMON_VGC"}, headers=headers_jogador)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["torneio_totais"] == 1
+    assert body["historico"][0]["id"] == torneio_vgc["id"]

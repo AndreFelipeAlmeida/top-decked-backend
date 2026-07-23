@@ -16,16 +16,6 @@ from app.utils.datetimeUtil import agora_brasil
 
 
 def recalcular_conquistas_jogador(session: SessionDep, jogador_id: int) -> list[JogadorConquista]:
-    """Recalcula o progresso do jogador em todas as conquistas ativas a partir
-    dos dados brutos (torneios, rodadas). Não guarda contadores incrementais —
-    sempre reconstrói o progresso do zero, no mesmo espírito de
-    JogadorService.calcular_estatisticas. Retorna as JogadorConquista que subiram
-    de nível nesta chamada (para o chamador notificar o frontend).
-
-    BRK-303: cada Conquista agora é atrelada a um TCG (Conquista.tcg) — o
-    progresso de cada categoria é calculado só com os torneios daquele jogo
-    específico, pra jogar Pokémon GO não progredir uma conquista pensada
-    pra TCG/VGC (e vice-versa)."""
     calculadoras = {
         CategoriaConquista.HORAS_JOGADAS: _calcular_horas_jogadas,
         CategoriaConquista.TORNEIOS_JOGADOS: _calcular_torneios_jogados,
@@ -125,9 +115,6 @@ def _calcular_horas_jogadas(session: SessionDep, jogador_id: int, tcg: TCG | Non
 
 
 def _calcular_janela_pessoal(session: SessionDep, link: JogadorTorneioLink) -> tuple[datetime | None, datetime | None]:
-    """Janela de tempo que ESTE jogador realmente jogou dentro do torneio —
-    não necessariamente a janela do torneio inteiro (cobre o caso de quem
-    entrou atrasado ou desistiu no meio). Ver docs/CONQUISTAS.md seção 4.1."""
     rodadas_do_jogador = session.exec(
         select(Rodada).where(
             (Rodada.torneio_id == link.torneio_id) &
@@ -203,11 +190,6 @@ def _calcular_vitorias(session: SessionDep, jogador_id: int, tcg: TCG | None) ->
     ).one()
 
 
-# Catálogo semente — ver docs/CONQUISTAS.md seção 7. Ajustável sem migração:
-# só editar esta lista (não afeta jogadores que já desbloquearam níveis).
-#
-# BRK-303: cada definição vira uma Conquista POR TCG (codigo_base + "_" +
-# tcg), nunca uma conquista global cross-TCG — ver seed_conquistas_catalogo.
 _CATALOGO_SEMENTE = [
     {
         "codigo_base": "HORAS_JOGADAS",
@@ -253,20 +235,10 @@ _CATALOGO_SEMENTE = [
     },
 ]
 
-# Códigos do catálogo pré-BRK-303 (uma única Conquista global, tcg=None,
-# por categoria) — precisam ser desativados (não deletados: preservam
-# JogadorConquista/HistoricoConquista já existentes) na primeira execução
-# depois desta mudança, senão continuariam somando progresso cross-TCG lado
-# a lado com as novas conquistas por TCG.
 _CODIGOS_GLOBAIS_LEGADOS = ("HORAS_JOGADAS", "TORNEIOS_JOGADOS", "VITORIAS")
 
 
 def seed_conquistas_catalogo(session: SessionDep):
-    """Popula o catálogo de conquistas por TCG. Idempotente por conquista
-    individual (checa por `codigo`, não mais "se existir qualquer
-    Conquista") — pode ser chamada de novo com segurança pra adicionar só o
-    que ainda falta, inclusive em bancos que já tinham o catálogo antigo
-    (global, pré-BRK-303) semeado."""
     for conquista_legada in session.exec(
         select(Conquista).where(Conquista.codigo.in_(_CODIGOS_GLOBAIS_LEGADOS))
     ).all():

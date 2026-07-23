@@ -1,10 +1,3 @@
-"""Testes do sistema de Eventos (docs/EVENTOS.md): metas com recompensa,
-regras de pontuação automáticas (observando torneios FINALIZADO do
-período) e pontos manuais ("Outros Motivos"). Nada é armazenado como total —
-pontos_automaticos/pontos_manuais/pontos_total são sempre recalculados na
-hora a partir de JogadorTorneioLink + RegraPontuacaoEvento +
-PontosManualEvento."""
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,15 +27,6 @@ from app.utils.Enums import TCG, TipoParticipanteTorneio, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 

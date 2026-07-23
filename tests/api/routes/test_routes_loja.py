@@ -8,15 +8,6 @@ from app.utils.Enums import StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -53,9 +44,6 @@ def test_retornar_lojas_vazio(client: TestClient):
 
 
 def test_retornar_lojas_so_lista_aprovadas(client: TestClient):
-    """BRK-403: a página de diretório é pública, mas uma loja PENDENTE ainda
-    nem tem subdomínio funcional de verdade pro visitante acessar — não faz
-    sentido divulgá-la."""
     _criar_loja(client, "Loja Aprovada Diretorio", "loja.aprovada.diretorio@gmail.com")
 
     r = client.post(
@@ -80,9 +68,6 @@ def test_retornar_lojas_sem_login_nao_marca_tcgs_organizados(client: TestClient)
 
 
 def test_retornar_lojas_marca_tcgs_organizados_do_jogador_logado(client: TestClient):
-    """BRK-403: GET /lojas/ cruza com os vínculos do jogador logado (se
-    houver) pra marcar em qual loja ele já é organizador e em quais TCGs —
-    puramente informativo, o endpoint continua público."""
     loja_organizada = _criar_loja(client, "Loja Organizada Diretorio", "loja.organizada.diretorio@gmail.com")
     loja_qualquer = _criar_loja(client, "Loja Qualquer Diretorio", "loja.qualquer.diretorio@gmail.com")
     jogador, headers_jogador = _criar_jogador_autenticado(
@@ -127,9 +112,6 @@ def test_criar_loja_com_nome_acentuado_remove_acentos_do_slug(client: TestClient
 
 
 def test_criar_loja_com_nome_duplicado_gera_slug_com_sufixo_numerico(client: TestClient):
-    """BRK-305: o slug precisa ser único (identifica o subdomínio) —
-    lojas com o mesmo nome não podem colidir, o desempate é um sufixo
-    numérico determinístico."""
     primeira = _criar_loja(client, "Loja Repetida", "repetida.um@gmail.com")
     segunda = _criar_loja(client, "Loja Repetida", "repetida.dois@gmail.com")
     terceira = _criar_loja(client, "Loja Repetida", "repetida.tres@gmail.com")
@@ -181,6 +163,31 @@ def test_atualizar_loja_autenticada(client: TestClient):
     data = r.json()
     assert data["nome"] == "Loja Atualizada"
     assert data["endereco"] == "Rua Atualizada, 321"
+
+
+def test_atualizar_loja_reenviando_o_proprio_email_nao_acusa_duplicado(client: TestClient):
+    _criar_loja(client, "Loja Email Proprio", "loja.email.proprio@gmail.com", "senha123")
+    token = _login(client, "loja.email.proprio@gmail.com", "senha123")
+
+    r = client.put(
+        "/api/lojas/",
+        json={"nome": "Loja Email Proprio", "email": "loja.email.proprio@gmail.com"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_atualizar_loja_para_email_de_outra_conta_e_rejeitado(client: TestClient):
+    _criar_loja(client, "Loja Email A", "loja.email.a@gmail.com", "senha123")
+    _criar_loja(client, "Loja Email B", "loja.email.b@gmail.com", "senha123")
+    token = _login(client, "loja.email.b@gmail.com", "senha123")
+
+    r = client.put(
+        "/api/lojas/",
+        json={"nome": "Loja Email B", "email": "loja.email.a@gmail.com"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_atualizar_loja_sem_autenticacao_e_negado(client: TestClient):

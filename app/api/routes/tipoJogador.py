@@ -79,8 +79,6 @@ def get_tipos_jogador(session: SessionDep, loja: Annotated[TokenData, Depends(re
         TipoJogador.loja_id == loja.id
     )).all()
 
-    if not tipos:
-        raise TopDeckedException.not_found("Nenhum tipo de jogador encontrado.")
     return tipos
 
 

@@ -2,9 +2,10 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.core.db import get_session
-from app.models import Loja
-from app.services.EmailService import criar_token_redefinicao_senha
+from app.models import Loja, Usuario
+from app.services.EmailService import criar_token_confirmacao, criar_token_redefinicao_senha
 from app.core.security import verificar_senha
+from app.utils.datetimeUtil import data_agora_brasil
 from app.utils.Enums import StatusAprovacaoLoja
 
 
@@ -24,10 +25,33 @@ def test_login_token_sucesso(client: TestClient):
     assert data["token_type"] == "bearer"
 
 
+def test_confirmar_email_retorna_json_em_vez_de_redirecionar(client: TestClient, session: Session):
+    usuario = Usuario(
+        email="confirmar.email@gmail.com",
+        tipo="jogador",
+        is_active=False,
+        data_cadastro=data_agora_brasil(),
+    )
+    usuario.set_senha("senha123")
+    session.add(usuario)
+    session.commit()
+
+    token = criar_token_confirmacao("confirmar.email@gmail.com")
+
+    r = client.get(f"/api/login/confirmar-email?token={token}", follow_redirects=False)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"detail": "E-mail confirmado com sucesso."}
+
+    session.refresh(usuario)
+    assert usuario.is_active is True
+
+
+def test_confirmar_email_com_token_invalido_e_rejeitado(client: TestClient):
+    r = client.get("/api/login/confirmar-email?token=token-invalido", follow_redirects=False)
+    assert r.status_code == 400, r.text
+
+
 def test_login_token_de_loja_retorna_tipo_e_slug(client: TestClient):
-    """BRK-308: o frontend usa tipo+slug da resposta de /login/token (sem
-    precisar de um segundo request) pra redirecionar o Dono de Loja direto
-    pro subdomínio dela."""
     r = client.post(
         "/api/lojas/",
         json={"nome": "Loja Login Slug", "endereco": "Rua X", "email": "loja.loginslug@gmail.com", "senha": "senha123"},

@@ -18,20 +18,6 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-# `JogadorTorneioLink.tipo_jogador_id` virou `regra_extra_id` (ver
-# docs/REGRA_EXTRA.md, item 70 de docs/DIVIDA_TECNICA.md) num rename de
-# model feito ANTES do Alembic existir neste projeto — a migration baseline
-# (a5f913d8cd90) já cria `jogadortorneiolink` com `regra_extra_id` do zero,
-# porque foi gerada por autogenerate contra um banco vazio, comparando com o
-# estado do model NAQUELE momento (que já estava com o nome novo). Isso
-# funciona bem pra bancos criados a partir do zero (dev/teste), mas deixa um
-# buraco pra qualquer banco que já existia ANTES dessa rodada — com
-# `tipo_jogador_id` de verdade, sem nenhuma migration aplicada — e nunca
-# passou por um `ALTER TABLE ... RENAME COLUMN`.
-#
-# Esta migration tampa esse buraco de forma defensiva: só renomeia se
-# encontrar a coluna antiga E não encontrar a nova — em qualquer banco criado
-# a partir da baseline (dev, teste, ou produção zerada), isso não faz nada.
 def _renomear_coluna(de: str, para: str) -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)

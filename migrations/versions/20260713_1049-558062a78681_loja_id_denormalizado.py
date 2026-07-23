@@ -28,13 +28,6 @@ def upgrade() -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
 
-    # Passo 1: coluna nullable — um ADD COLUMN ... NOT NULL sem default
-    # exigiria reescrever a tabela inteira na hora e falharia contra
-    # qualquer linha já existente (BRK-304, nota técnica de migrations).
-    # Defensivo (só adiciona o que ainda não existe) pelo mesmo motivo de
-    # f0256c9944ef/6944ed7a020e: um banco que já tinha a coluna criada por
-    # create_all() antes desta migration rodar de verdade não pode tentar
-    # recriá-la.
     for tabela in _TABELAS:
         colunas = {c["name"] for c in inspector.get_columns(tabela)}
         if 'loja_id' in colunas:
@@ -67,11 +60,6 @@ def upgrade() -> None:
                 "resolva esses dados manualmente antes de rodar esta migration."
             )
 
-    # Passo 3: trigger de integridade — só Postgres (produção). SQLite não
-    # tem PRAGMA foreign_keys habilitado neste projeto e a suíte de testes
-    # roda nele; a garantia de integridade em dev/teste vem inteiramente da
-    # aplicação (todo INSERT já passa loja_id=torneio.loja_id — ver
-    # app/services/*.py). Ver docs/MULTI_TENANCY.md.
     if conn.dialect.name == "postgresql":
         conn.execute(sa.text(f"""
             CREATE OR REPLACE FUNCTION {_NOME_FUNCAO_TRIGGER}() RETURNS trigger AS $$

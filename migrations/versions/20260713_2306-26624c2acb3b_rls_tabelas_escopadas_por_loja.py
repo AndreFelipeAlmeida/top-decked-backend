@@ -18,12 +18,6 @@ down_revision: Union[str, Sequence[str], None] = '4654527c75e0'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# BRK-306: tabelas do domínio de torneio que já carregam loja_id direto na
-# linha (torneio.loja_id ou o loja_id denormalizado do BRK-304) — o núcleo
-# do produto desta sprint. Tabelas do subsistema de estoque/crédito
-# (item, transacao, historicocredito, categoria...) também têm loja_id mas
-# ficam de fora desta rodada por escopo (ver docs/tcc/ BRK-310); adicioná-
-# las depois é só repetir o mesmo padrão abaixo.
 _TABELAS_NOT_NULL = ("jogadortorneiolink", "rodada", "pontuacaoextra", "temporada", "evento")
 # loja_id nullable no schema atual — uma regra (TipoJogador) ou torneio sem
 # loja_id não pode virar invisível pra todo mundo (NULL = X nunca é

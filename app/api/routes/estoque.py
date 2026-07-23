@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from app.core.db import get_session, SessionDep
-from app.models import Item, Loja, HistoricoItem, ItemBase
+from app.models import Categoria, Item, Loja, HistoricoItem, ItemBase
 from app.dependencies import retornar_loja_atual
 from app.utils.Enums import TipoMovimentacaoItem
 from app.schemas.Estoque import MovimentacaoItem, TipoMovimentacaoItemUpdate
@@ -27,30 +27,40 @@ def create_item(session: SessionDep, item: Item, current_loja: Loja = Depends(re
     session.commit()
     session.refresh(item)
 
-    historico = HistoricoItem(item_id=item.id,
-                              nome_item=item.nome,
-                              loja_id=current_loja.id,
-                              categoria=item.categoria,
-                              quantidade=item.quantidade,
-                              tipo=TipoMovimentacaoItem.CADASTRO)
+    historico = HistoricoItem(
+        item_id=item.id,
+        loja_id=current_loja.id,
+        quantidade=item.quantidade,
+        tipo=TipoMovimentacaoItem.CADASTRO,
+        descricao=f"Item '{item.nome}' cadastrado",
+    )
 
     session.add(historico)
     session.commit()
+    session.refresh(item)
 
     return item
 
 
 @router.get("/", response_model=List[Item])
-def read_items(session: SessionDep, skip: int = 0, limit: int = 100, current_loja: Loja = Depends(retornar_loja_atual)):
-    items = session.exec(select(Item).where(
-        Item.loja_id == current_loja.id).offset(skip).limit(limit)).all()
+def read_items(
+    session: SessionDep,
+    skip: int = 0,
+    limit: int = 100,
+    apenas_vendaveis: bool = False,
+    current_loja: Loja = Depends(retornar_loja_atual),
+):
+    query = select(Item).where(Item.loja_id == current_loja.id)
+    if apenas_vendaveis:
+        query = query.where(Item.is_vendavel == True)
+    items = session.exec(query.offset(skip).limit(limit)).all()
     return items
 
 
 @router.get("/{item_id}", response_model=Item)
-def read_item(id: int, current_loja: Loja = Depends(retornar_loja_atual), session: Session = Depends(get_session)):
+def read_item(item_id: int, current_loja: Loja = Depends(retornar_loja_atual), session: Session = Depends(get_session)):
     item = session.exec(select(Item).where(
-        Item.id == id, Item.loja_id == current_loja.id)).first()
+        Item.id == item_id, Item.loja_id == current_loja.id)).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item não encontrado.")
     return item
@@ -73,7 +83,17 @@ def update_item(
 
     item_data = item.model_dump(exclude_unset=True)
 
-    campos_monitorados = ["nome", "preco", "categoria", "min_quantidade"]
+    if "categoria" in item_data and item_data["categoria"] != db_item.categoria:
+        categoria_destino = session.exec(select(Categoria).where(
+            Categoria.id == item_data["categoria"],
+            Categoria.loja_id == current_loja.id
+        )).first()
+        if not categoria_destino:
+            raise HTTPException(
+                status_code=404, detail="Categoria de destino não encontrada.")
+
+    campos_monitorados = ["nome", "preco", "categoria",
+                           "min_quantidade", "is_vendavel"]
 
     for campo in campos_monitorados:
         if campo in item_data:

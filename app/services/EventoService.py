@@ -2,6 +2,7 @@ from sqlmodel import select
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
+from app.dependencies import definir_tenant_sessao
 from app.models import (
     Evento,
     Jogador,
@@ -19,12 +20,10 @@ from app.utils.TorneioDataUtil import data_efetiva_torneio, momento_efetivo_torn
 
 
 def verificar_permissao_evento(session: SessionDep, evento: Evento, usuario: TokenData) -> None:
-    """Mesma regra de `TorneioService.verificar_permissao_gerenciar_torneio`:
-    autoriza a loja dona do evento ou um jogador que organiza o TCG do
-    evento nessa loja (ver docs/DIVIDA_TECNICA.md)."""
     if usuario.tipo == "loja":
         if evento.loja_id != usuario.id:
             raise TopDeckedException.forbidden()
+        definir_tenant_sessao(session, evento.loja_id)
         return
 
     if usuario.tipo == "jogador":
@@ -49,6 +48,7 @@ def verificar_permissao_evento(session: SessionDep, evento: Evento, usuario: Tok
             raise TopDeckedException.forbidden(
                 "Jogador não possui permissão para gerenciar eventos deste TCG nesta loja"
             )
+        definir_tenant_sessao(session, evento.loja_id)
         return
 
     raise TopDeckedException.forbidden()

@@ -1,14 +1,3 @@
-"""Testes funcionais do suporte a Pokémon GO e da composição por partida:
-GO segue o mesmo esquema de VGC (catálogo populado, time completo de 6
-Pokémon, sem representação de deck), mas com uma peculiaridade — o jogador
-escolhe só 3 dos 6 Pokémon do time pra jogar em CADA partida, um recorte que
-pode mudar de rodada pra rodada sem nunca alterar o time completo levado ao
-torneio. Isso é modelado por ComposicaoPartida/RodadaComposicao
-(app/models.py) + garantir_composicao_partida (ComposicaoService.py): pra
-TCG/VGC a mesma ComposicaoPartida.id é reaproveitada em toda rodada nova da
-participação, só pra GO uma ComposicaoPartida nova (clonada do time) é criada
-a cada rodada. Ver docs/COMPOSICAO.md e docs/DIVIDA_TECNICA.md."""
-
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -36,15 +25,6 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 

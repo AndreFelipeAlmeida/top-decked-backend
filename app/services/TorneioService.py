@@ -3,6 +3,7 @@ from sqlmodel import col, select, func
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
+from app.dependencies import definir_tenant_sessao
 from app.models import Rodada, Torneio, Jogador, JogadorCriado, JogadorTorneioLink, TipoJogador, LojaJogadorLink, LojaJogadorOrganizadorTCG, PontuacaoExtra
 from app.utils.Enums import TCG, TipoParticipanteTorneio
 from app.utils.CategoriaUtil import encontrar_temporada_do_torneio, calcular_categoria_na_temporada
@@ -14,12 +15,10 @@ JOGOS_FORMATO_SUICO = (TCG.POKEMON, TCG.POKEMON_VGC)
 
 
 def verificar_permissao_gerenciar_torneio(session: SessionDep, torneio: Torneio, usuario: TokenData):
-    """Autoriza tanto a loja dona do torneio quanto um jogador que organiza o
-    TCG do torneio nessa loja (ver docs/DIVIDA_TECNICA.md) a gerenciá-lo
-    (editar, importar resultados, ajustar/recalcular pontuação)."""
     if usuario.tipo == "loja":
         if torneio.loja_id != usuario.id:
             raise TopDeckedException.forbidden()
+        definir_tenant_sessao(session, torneio.loja_id)
         return
 
     if usuario.tipo == "jogador":
@@ -48,20 +47,13 @@ def verificar_permissao_gerenciar_torneio(session: SessionDep, torneio: Torneio,
             raise TopDeckedException.forbidden(
                 "Jogador não possui permissão para gerenciar torneios deste TCG nesta loja"
             )
+        definir_tenant_sessao(session, torneio.loja_id)
         return
 
     raise TopDeckedException.forbidden()
 
 
 def calcular_categoria_do_link(session: SessionDep, torneio: Torneio, link: JogadorTorneioLink) -> str | None:
-    """Categoria (Junior/Senior/Master) do jogador NESTE torneio — sempre
-    calculada na hora a partir da Temporada vigente (pela data do torneio),
-    nunca armazenada (ver docs/TEMPORADAS.md). Data de nascimento: usa a do
-    JogadorCriado; se ele não tiver uma (ex.: veio de um import antigo, sem
-    <birthdate>), cai pra data de nascimento da conta real vinculada
-    (Jogador.data_nascimento), se houver uma. Sem nenhuma das duas, ou sem
-    Temporada cadastrada pro jogo/período do torneio, o jogador não entra na
-    categorização (None)."""
     if not link.jogador_criado:
         return None
 
@@ -223,11 +215,6 @@ def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
             "id": rodada.id,
             "jogador1_id": rodada.jogador1_id,
             "jogador2_id": rodada.jogador2_id,
-            # Bug corrigido aqui (ver docs/DIVIDA_TECNICA.md): a chave era
-            # "vencedor" (o relacionamento) em vez de "vencedor_id" (a coluna
-            # escalar que TorneioPublico/RodadaPublico de fato esperam) — o
-            # vencedor da rodada nunca aparecia na resposta da API, sempre
-            # serializando como null independente do resultado real.
             "vencedor_id": rodada.vencedor_id,
             "num_rodada": rodada.num_rodada,
             "mesa": rodada.mesa,
@@ -242,13 +229,6 @@ def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
 
 
 def regras_extras_atuais(torneio: Torneio) -> dict:
-    """Dict {link_id (str): regra_extra_id} com as regras extras já
-    atribuídas por jogador neste torneio agora. Usado por chamadores de
-    editar_torneio_regras que não estão mexendo em regra extra nenhuma (ex.:
-    salvar o nome/data do torneio, iniciar o torneio) e só querem preservar o
-    que já existe — sem isso, o "else: None" de editar_torneio_regras
-    apagaria a regra extra de todo mundo a cada chamada (ver
-    docs/REGRA_EXTRA.md)."""
     return {
         str(jt.id): jt.regra_extra_id
         for jt in torneio.jogadores
@@ -260,12 +240,6 @@ def editar_torneio_regras(session: SessionDep, torneio: Torneio, regra_basica: i
     if regra_basica:
         torneio.regra_basica_id = regra_basica
 
-    # pontuacao_com_regras é sempre recalculada do zero aqui (rodadas somam
-    # em cima logo abaixo, em calcular_pontuacao) — Pontuação Extra
-    # (PontuacaoExtra, ver docs/PONTUACAO_EXTRA.md) não é uma rodada, então
-    # precisa ser resomada explicitamente como parte da base, junto de
-    # pontuacao_de_participacao, senão qualquer reset (finalizar rodada,
-    # trocar regra, recalcular) apagaria pontos extras já dados.
     pontos_extras_por_jogador = dict(
         session.exec(
             select(PontuacaoExtra.jogador_criado_id, func.sum(PontuacaoExtra.pontos))
@@ -285,10 +259,6 @@ def editar_torneio_regras(session: SessionDep, torneio: Torneio, regra_basica: i
         if regras_adicionais and str(jogador_id) in regras_adicionais.keys():
             jogador.regra_extra_id = regras_adicionais[str(jogador_id)]
         else:
-            # Sem entrada em regras_adicionais = sem regra extra (None) — a
-            # regra básica do torneio já se aplica a todo mundo sozinha, uma
-            # regra extra é sempre um ajuste OPCIONAL por cima dela (ver
-            # docs/REGRA_EXTRA.md), nunca um valor que "falta preencher".
             jogador.regra_extra_id = None
         session.add(jogador)
 
@@ -305,15 +275,6 @@ def calcular_pontuacao(session: SessionDep, torneio: Torneio):
 
 
 def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
-    """Recalcula, para cada participação (JogadorTorneioLink) deste torneio,
-    os contadores de vitórias/derrotas/empates/byes e o desempate suíço
-    padrão: OMW% (média da taxa de vitória dos adversários reais — byes não
-    contam como adversário de ninguém) e OOMW% (média do OMW% dos
-    adversários), usado quando o OMW% empata. Ver docs/RANKING.md.
-
-    Só roda para jogos de formato suíço (JOGOS_FORMATO_SUICO) — outros TCGs
-    ficam com os contadores zerados e as porcentagens em None.
-    """
     if torneio.jogo not in JOGOS_FORMATO_SUICO:
         return
 
@@ -326,6 +287,9 @@ def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
 
         for rodada in torneio.rodadas:
             if rodada.jogador1_id != link.id and rodada.jogador2_id != link.id:
+                continue
+
+            if not rodada.finalizada:
                 continue
 
             eh_bye = rodada.jogador1_id is None or rodada.jogador2_id is None
@@ -370,26 +334,6 @@ def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
 
 
 def calcular_pontuacao_rodada(session: SessionDep, rodada: Rodada, regra_basica: TipoJogador):
-    """pontuacao (bruta): sempre só a regra básica do torneio, igual pra todo
-    mundo, nunca afetada por regra extra — é o valor "de referência" que
-    ignora qualquer ajuste por jogador.
-
-    pontuacao_com_regras (oficial): regra básica + regra extra própria
-    (opcional) + regra extra do OPONENTE (opcional), pros três resultados
-    possíveis (vitória/derrota/empate):
-
-        vitoria  = basica.pt_vitoria + (própria.pt_vitoria se tiver)
-                                      + (oponente.pt_oponente_ganha se tiver)
-        derrota  = basica.pt_derrota + (própria.pt_derrota se tiver)
-                                      + (oponente.pt_oponente_perde se tiver)
-        empate   = basica.pt_empate  + (própria.pt_empate se tiver)
-                                      + (oponente.pt_oponente_empate se tiver)
-
-    Regra extra é um AJUSTE, nunca substitui a básica — um jogador sem regra
-    extra (o caso normal) pontua só pela básica. Os campos
-    pt_oponente_ganha/pt_oponente_perde/pt_oponente_empate da regra BÁSICA do
-    torneio não entram nessa conta — só fazem sentido numa regra extra (ver
-    docs/REGRA_EXTRA.md)."""
     jogador1_id = rodada.jogador1_id
     jogador2_id = rodada.jogador2_id
     jogador1_link = rodada.jogador1
@@ -464,9 +408,6 @@ def calcular_pontuacao_rodada(session: SessionDep, rodada: Rodada, regra_basica:
         session.add(jogador2_link)
 
 def get_torneio_top(session: SessionDep, torneio_id: str):
-    # Quem é só Juiz não entra no ranking/pódio deste torneio específico (só
-    # no ranking geral entre torneios — ver docs/PONTUACAO_EXTRA.md); quem é
-    # JOGADOR_E_JUIZ entra normalmente, é jogador de verdade também.
     jogadores = session.exec(
         select(JogadorTorneioLink)
         .where(

@@ -25,16 +25,11 @@ class CreditoRemove(SQLModel):
 
 
 class _JogadorComTcgsPublico(SQLModel):
+    nome: str
     tcgs: list[JogadorCriadoPublico] = []
 
 
 class _ComGameIdDerivado(SQLModel):
-    """LojaJogadorLink só guarda jogador_id (conta real) — não existe mais
-    game_id/tcg denormalizado nem JogadorCriado ligado diretamente ao crédito
-    (ver docs/JOGADORES.md). game_id/tcg aqui são só informativos: o primeiro
-    Game ID que essa conta reivindicou, em qualquer TCG — útil pra loja
-    reconhecer visualmente o jogador, mas não é mais a chave de identidade
-    usada pra criar/procurar o vínculo de crédito."""
     jogador: Optional[_JogadorComTcgsPublico] = None
     game_id: Optional[str] = None
     tcg: Optional[TCG] = None

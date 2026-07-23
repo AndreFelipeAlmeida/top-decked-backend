@@ -28,7 +28,7 @@ from app.utils.datetimeUtil import agora_brasil
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
-from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual, contexto_dominio
+from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual, contexto_dominio, permitir_leitura_publica, definir_tenant_sessao
 from sqlmodel import select
 from sqlalchemy import func
 from typing import Dict
@@ -255,8 +255,6 @@ def get_loja_torneios(session: SessionDep, loja: Annotated[TokenData, Depends(re
         Torneio.loja_id == loja.id
     )).all()
 
-    if not torneios:
-        raise TopDeckedException.not_found("Nenhum torneio encontrado.")
     return [retornar_torneio_completo(session, torneio) for torneio in torneios]
 
 
@@ -300,10 +298,6 @@ def iniciar_torneio(session: SessionDep, torneio_id: str,
     if pontuacao_de_participacao:
         torneio.pontuacao_de_participacao = pontuacao_de_participacao
 
-    # Preserva as regras extras já atribuídas quando quem chama (ex.: o botão
-    # "Iniciar Torneio", que normalmente não reenvia isso) não está de fato
-    # mexendo nelas — sem isso, iniciar o torneio apagaria a regra extra de
-    # todo mundo (mesma classe de bug do item 53 de docs/DIVIDA_TECNICA.md).
     torneio = editar_torneio_regras(
         session, torneio,
         regra_basica_id,
@@ -342,8 +336,6 @@ def finalizar_torneio(session: SessionDep, torneio_id: str, loja: Annotated[Toke
     session.commit()
     session.refresh(torneio)
 
-    # Um torneio finalizado é o gatilho principal de recálculo de conquistas
-    # (horas jogadas, torneios jogados, vitórias) — ver docs/CONQUISTAS.md.
     jogadores_ids = {
         link.jogador_criado.jogador_id
         for link in torneio.jogadores
@@ -448,10 +440,6 @@ def editar_rodada(session: SessionDep,
             raise TopDeckedException.bad_request(
                 "O vencedor da mesa precisa ser um dos jogadores desta mesa")
         rodada.vencedor_id = vencedor_id
-        # Enviar vencedor_id é a declaração explícita do organizador sobre o
-        # resultado da mesa — None aqui significa empate, não "ainda não
-        # jogou" (BRK-302). Por isso finaliza sempre que o campo é
-        # informado, mesmo quando o valor é None.
         rodada.finalizada = True
 
     session.add(rodada)
@@ -477,13 +465,6 @@ def deletar_rodada(session: SessionDep,
                    torneio_id: str,
                    num_rodada: int,
                    usuario: Annotated[TokenData, Depends(retornar_usuario_atual)]):
-    """Exclusão de uma rodada inteira (todas as mesas daquele num_rodada) —
-    estritamente LIFO (BRK-302): só a última rodada gerada pode ser apagada.
-    Rodadas intermediárias já foram usadas como histórico de pareamento por
-    rodadas seguintes (RodadaService.nova_rodada evita reencontros olhando
-    esse histórico), então apagar uma do meio deixaria pareamentos futuros
-    inconsistentes com o que realmente aconteceu. O front nunca deve confiar
-    cegamente: a validação real é sempre feita aqui contra o banco."""
     torneio = session.get(Torneio, torneio_id)
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
@@ -970,11 +951,8 @@ def recalcular_pontuacao_torneio(session: SessionDep,
     if pontuacao_de_participacao is not None:
         torneio.pontuacao_de_participacao = pontuacao_de_participacao
 
-    # Reaplica a regra escolhida (zera pontuacao/pontuacao_com_regras e limpa
-    # a regra extra de cada participante) e recalcula a partir das rodadas.
-    # Não preserva regras extras (por-jogador) que tenham sido atribuídas
-    # antes — o botão "Recalcular" é um reset explícito pra regra básica.
-    torneio = editar_torneio_regras(session, torneio, regra_a_usar, None)
+    torneio = editar_torneio_regras(
+        session, torneio, regra_a_usar, regras_extras_atuais(torneio))
     torneio.regra_basica_id = regra_a_usar
     session.add(torneio)
     calcular_pontuacao(session, torneio)
@@ -988,18 +966,6 @@ def recalcular_pontuacao_torneio(session: SessionDep,
 def deletar_torneio(session: SessionDep,
                     torneio_id: str,
                     usuario: Annotated[TokenData, Depends(retornar_usuario_atual)]):
-    """Apaga um único torneio e tudo que depende dele. Sem migrations
-    (docs/DIVIDA_TECNICA.md item 6) e sem PRAGMA foreign_keys habilitado no
-    SQLite (app/core/db.py), nenhum `ondelete="CASCADE"` declarado nas
-    colunas é de fato aplicado pelo banco — e várias dessas dependências
-    (RodadaComposicao, ComposicaoPartida) nem têm relacionamento ORM até
-    Torneio pra cascatear automaticamente. Por isso o delete é manual e
-    explícito, filho antes de pai: composição por partida (Pokémon GO) →
-    RodadaComposicao → composição completa do jogador → Rodada →
-    JogadorTorneioLink → Torneio, mais Pontuação Extra do torneio (não
-    depende de mais nada, pode sair a qualquer momento antes do Torneio).
-    Não mexe em conquistas/JogadorCriado/histórico financeiro — isso
-    pertence ao jogador, não ao torneio."""
     torneio = session.get(Torneio, torneio_id)
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
@@ -1041,17 +1007,15 @@ def deletar_torneio(session: SessionDep,
 @router.get("/", response_model=list[TorneioPublico])
 def get_torneios(
     session: SessionDep,
+    _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
     loja_id: Annotated[int | None, Depends(contexto_dominio)] = None,
+    tcg: str | None = None,
 ):
-    # BRK-407: listagem global do jogador (Torneios/Rankings navegam TODAS
-    # as lojas quando no domínio raiz) — mas dentro do subdomínio de uma
-    # loja específica, contexto_dominio (resolvido pelo TenantHostMiddleware
-    # a partir do Host, BRK-307) já trava o resultado só naquela loja. Não
-    # depende do front mandar nenhum parâmetro: o Host já é a fonte da
-    # verdade, então o vazamento fica barrado mesmo que o front esqueça.
     query = select(Torneio)
     if loja_id is not None:
         query = query.where(Torneio.loja_id == loja_id)
+    if tcg is not None:
+        query = query.where(Torneio.jogo == tcg)
 
     torneios = session.exec(query)
     return [retornar_torneio_completo(session, torneio) for torneio in torneios]
@@ -1061,7 +1025,8 @@ def get_torneios(
 def get_torneio_por_loja(
     torneio_id: str,
     session: SessionDep,
-    _: Annotated[TokenData, Depends(retornar_usuario_atual)]
+    _: Annotated[TokenData, Depends(retornar_usuario_atual)],
+    _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
 ):
     torneio = session.exec(select(Torneio).where(
         Torneio.id == torneio_id,
@@ -1080,6 +1045,8 @@ def inscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annotate
 
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
+
+    definir_tenant_sessao(session, torneio.loja_id)
 
     if torneio.status != StatusTorneio.ABERTO:
         raise TopDeckedException.bad_request("Torneio não está aberto para inscrições")
@@ -1131,6 +1098,9 @@ def desinscrever_jogador(session: SessionDep, torneio_id: str, token_data: Annot
 
     if not torneio:
         raise TopDeckedException.not_found("Torneio não existe")
+
+    definir_tenant_sessao(session, torneio.loja_id)
+
     if torneio.status != StatusTorneio.ABERTO:
         raise TopDeckedException.bad_request("Torneio não está aberto para inscrições")
 

@@ -4,15 +4,6 @@ from fastapi.testclient import TestClient
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -65,9 +56,6 @@ def test_atualizar_jogador_autenticado(client: TestClient) -> None:
     _criar_jogador(client, "Ana", "ana@gmail.com", "senha123")
     token = _login(client, "ana@gmail.com", "senha123")
 
-    # PUT /jogadores/ atualiza o PRÓPRIO jogador autenticado (não recebe id na
-    # URL) — `tcgs` precisa ser enviado (mesmo que null) porque o schema
-    # `JogadorUpdate` não tinha default antes (ver docs/DIVIDA_TECNICA.md).
     r = client.put(
         "/api/jogadores/",
         json={"nome": "Ana Atualizada", "tcgs": None},
@@ -75,6 +63,31 @@ def test_atualizar_jogador_autenticado(client: TestClient) -> None:
     )
     assert r.status_code == 200, r.text
     assert r.json()["nome"] == "Ana Atualizada"
+
+
+def test_atualizar_jogador_reenviando_o_proprio_email_nao_acusa_duplicado(client: TestClient) -> None:
+    _criar_jogador(client, "Bia", "bia.email@gmail.com", "senha123")
+    token = _login(client, "bia.email@gmail.com", "senha123")
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"nome": "Bia", "email": "bia.email@gmail.com", "tcgs": None},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_atualizar_jogador_para_email_de_outra_conta_e_rejeitado(client: TestClient) -> None:
+    _criar_jogador(client, "Caio", "caio.email@gmail.com", "senha123")
+    _criar_jogador(client, "Duda", "duda.email@gmail.com", "senha123")
+    token = _login(client, "duda.email@gmail.com", "senha123")
+
+    r = client.put(
+        "/api/jogadores/",
+        json={"nome": "Duda", "email": "caio.email@gmail.com", "tcgs": None},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_data_nascimento_nao_perde_um_dia_ao_salvar(client: TestClient) -> None:

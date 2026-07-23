@@ -10,28 +10,57 @@ from app.core.db import SessionDep
 
 from typing import Annotated
 from fastapi import Depends, Request
+from sqlmodel import Session, text
+from sqlalchemy import event
 import jwt
 
-# BRK-309: SameSite=Lax ainda deixa passar GET "top-level navigation"
-# cross-site (é o que permite abrir um link e continuar logado), mas
-# qualquer mutação (POST/PUT/PATCH/DELETE) feita via cookie precisa do
-# token CSRF batendo — GET nunca muda estado, então fica de fora de
-# propósito (checar CSRF em GET só quebraria navegação normal sem
-# proteger nada).
 _METODOS_MUTAVEIS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def contexto_dominio(request: Request) -> int | None:
-    """Loja injetada por TenantHostMiddleware a partir do subdomínio da
-    requisição (BRK-307) — None em modo global (domínio raiz/sem
-    subdomínio). Endpoints que precisam adaptar a resposta ao subdomínio
-    (ex.: GET /tenant/atual, BRK-308) importam esta dependency; quem não
-    liga pro domínio simplesmente não a usa.
+def _reaplicar_gucs_de_tenant(session: Session, transaction, connection) -> None:
+    """Listener global (registrado uma única vez na classe `Session` — vale
+    pra toda Session do app inteiro, não só a de uma requisição específica)
+    que reaplica as GUCs de tenant a cada nova transação física que essa
+    Session abrir. Necessário porque `SET LOCAL` (a variante correta de usar
+    aqui — ver definir_tenant_sessao) só vale para UMA transação: uma rota
+    que faz `session.commit()` no meio do seu próprio corpo (comum neste
+    código — ex.: torneio.py:finalizar_torneio precisa comitar o status do
+    torneio antes de chamar recalcular_conquistas_jogador, que faz seu
+    próprio commit no fim) abre, implicitamente, uma transação NOVA assim
+    que a próxima query roda — e, sem este listener, essa segunda transação
+    nasceria sem tenant nenhum declarado, fail-closed pelo resto da
+    requisição mesmo já tendo passado pela autorização no início.
 
-    request.state.loja_id só existe quando o middleware roda de verdade
-    (toda requisição HTTP real via ASGI); em testes que chamam a função de
-    rota diretamente (fora do app ASGI) ele não estaria setado — getattr
-    com default cobre esse caso."""
+    `session.info` é um dict da própria Session (não da transação) — sobrevive
+    a qualquer `commit()`/`rollback()` intermediário, e é exatamente por isso
+    que serve de fonte de verdade aqui, em vez de reaplicar só uma vez."""
+    if connection.dialect.name != "postgresql":
+        return
+    loja_id = session.info.get("_tenant_loja_id")
+    if loja_id is not None:
+        connection.execute(text("SET LOCAL app.current_loja_id = :loja_id"), {"loja_id": loja_id})
+    if session.info.get("_leitura_publica"):
+        connection.execute(text("SET LOCAL app.leitura_publica = 'on'"))
+
+
+event.listen(Session, "after_begin", _reaplicar_gucs_de_tenant)
+
+
+def definir_tenant_sessao(session: Session, loja_id: int) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.info["_tenant_loja_id"] = loja_id
+    session.execute(text("SET LOCAL app.current_loja_id = :loja_id"), {"loja_id": loja_id})
+
+
+def permitir_leitura_publica(session: SessionDep) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.info["_leitura_publica"] = True
+    session.execute(text("SET LOCAL app.leitura_publica = 'on'"))
+
+
+def contexto_dominio(request: Request) -> int | None:
     return getattr(request.state, "loja_id", None)
 
 
@@ -54,10 +83,6 @@ async def retornar_usuario_atual(
     session: SessionDep,
     token_header: Annotated[str | None, Depends(OAUTH2_SCHEME)] = None,
 ):
-    # BRK-309: cookie é a fonte primária (é o que o browser manda sozinho,
-    # inclusive entre subdomínios — Domain=.brickei.com.br); o header
-    # Authorization vira só o fallback pra clientes que não são browser
-    # (scripts, apps mobile) e por isso não têm cookie nenhum.
     token_cookie = request.cookies.get(COOKIE_ACCESS_TOKEN)
     token = token_cookie or token_header
     if not token:
@@ -97,16 +122,6 @@ async def retornar_usuario_atual_opcional(
     session: SessionDep,
     token_header: Annotated[str | None, Depends(OAUTH2_SCHEME)] = None,
 ) -> TokenData | None:
-    """Mesma resolução de retornar_usuario_atual, mas tolerante: retorna
-    None (em vez de levantar 401/403) quando não há sessão nenhuma ou o
-    token é inválido/expirado. Usado por endpoints públicos que só
-    enriquecem a resposta SE o visitante estiver logado (ex.: GET /lojas/,
-    BRK-403, marca em qual loja o jogador já organiza) — o endpoint
-    continua funcionando normalmente pra quem não está logado.
-
-    De propósito não checa CSRF: é só chamada por rotas GET (nunca muda
-    estado), e CSRF nunca se aplicou a GET mesmo em retornar_usuario_atual
-    (ver _METODOS_MUTAVEIS acima)."""
     token = request.cookies.get(COOKIE_ACCESS_TOKEN) or token_header
     if not token:
         return None
@@ -121,10 +136,18 @@ async def retornar_usuario_atual_opcional(
     return _token_data_do_payload(payload)
 
 
-async def retornar_loja_atual(token_data: Annotated[str, Depends(retornar_usuario_atual)]):
+async def retornar_loja_atual(
+    session: SessionDep,
+    token_data: Annotated[str, Depends(retornar_usuario_atual)],
+):
     if not token_data.tipo == "loja":
         raise TopDeckedException.forbidden()
 
+    # Toda rota que autentica "eu sou esta loja, agindo em nome dela"
+    # (criar/editar torneio, gerar rodada, gerenciar estoque, etc.) já sabe
+    # o tenant certo aqui — nenhum código de rota precisa lembrar de chamar
+    # nada à parte.
+    definir_tenant_sessao(session, token_data.id)
     return token_data
 
 

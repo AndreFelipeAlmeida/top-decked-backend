@@ -16,14 +16,6 @@ from app.utils.Enums import MotivoPontuacaoExtra, TipoParticipanteTorneio
 
 
 def criar_pontuacao_extra(session: SessionDep, torneio: Torneio, dados: PontuacaoExtraCriarDTO) -> PontuacaoExtra:
-    """Dá pontos extras a um jogador neste torneio, sempre em cima de
-    `pontuacao_com_regras` (nunca em `pontuacao`, a "crua" — ver
-    docs/PONTUACAO_EXTRA.md). Um jogador só tem UMA linha de
-    JogadorTorneioLink por torneio (fonte única de verdade — ver
-    TipoParticipanteTorneio.JOGADOR_E_JUIZ), então basta achar essa linha.
-    Se ainda não existir, cria uma na hora — exceto pro motivo Juiz, que
-    exige o papel de Juiz já cadastrado (via TorneioService.adicionar_juiz):
-    dar pontos não é mais o que "torna" alguém Juiz do torneio."""
     jogador_criado = session.get(JogadorCriado, dados.jogador_criado_id)
     if not jogador_criado:
         raise TopDeckedException.not_found("Jogador não encontrado")

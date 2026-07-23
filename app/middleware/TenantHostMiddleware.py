@@ -12,33 +12,6 @@ _TTL_SEGUNDOS = 30
 
 
 class TenantHostMiddleware:
-    """ASGI middleware (BRK-307): resolve o tenant (loja) a partir do
-    cabeçalho `Host`, antes de qualquer roteamento ou autenticação — por
-    isso é middleware ASGI puro, não uma dependency do FastAPI (dependency
-    só roda depois que uma rota já foi escolhida).
-
-    Regras de negócio:
-    - Host igual a `settings.ROOT_DOMAIN` (ou `localhost`/`127.0.0.1`, pra
-      dev local) = modo global: `request.state.loja_id = None`, descoberta
-      cross-tenant continua funcionando normalmente.
-    - Host `{slug}.ROOT_DOMAIN` = modo travado: `request.state.loja_id`
-      recebe o id daquela loja.
-    - `{slug}.ROOT_DOMAIN` cujo slug não corresponde a nenhuma loja: a
-      requisição é cortada AQUI com 404 explícito — nunca cai pra modo
-      global silenciosamente (o usuário acharia que a loja existe mas está
-      sem torneios, em vez de "esse endereço não existe").
-    - Qualquer outro host (não é o domínio raiz nem um subdomínio dele —
-      ex.: acesso direto por IP em algum ambiente) é tratado como global,
-      já que tecnicamente não é "um subdomínio inexistente", é só um host
-      fora do esquema de tenant.
-
-    `session_factory` é injetável de propósito (default: sessão real via
-    `app.core.db.engine`) — testes montam uma instância própria do
-    middleware apontando pro banco isolado do teste, em vez de bater no
-    banco de verdade da aplicação (que middleware nenhum enxerga através
-    de `app.dependency_overrides`, já que roda fora da injeção de
-    dependência do FastAPI)."""
-
     def __init__(
         self,
         app: ASGIApp,

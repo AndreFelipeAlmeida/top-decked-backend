@@ -1,6 +1,3 @@
-"""Testes do import de .tdf focados em data de nascimento (JogadorCriado) —
-ver docs/JOGADORES.md."""
-
 from datetime import date
 
 from fastapi.testclient import TestClient
@@ -8,22 +5,13 @@ from fastapi.testclient import TestClient
 from app.core.db import get_session
 from sqlmodel import Session, select
 
-from app.models import JogadorCriado, Loja
+from app.models import JogadorCriado, Loja, Torneio
 from app.utils.Enums import StatusAprovacaoLoja
 
 
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -111,6 +99,31 @@ def test_import_preenche_data_nascimento_do_jogador_criado_na_criacao(
     jc2 = session.exec(select(JogadorCriado).where(JogadorCriado.game_id == "gid-nasc-2")).first()
     assert jc1.data_nascimento == date(1993, 2, 27)
     assert jc2.data_nascimento == date(2000, 2, 27)
+
+
+def test_import_por_loja_grava_loja_id_e_datas_corretamente(
+    client: TestClient, session: Session
+) -> None:
+    headers = _criar_loja_autenticada(client, "Loja Import Datas", "loja.importdatas@gmail.com")
+    session_loja = session.exec(select(Loja).where(Loja.nome == "Loja Import Datas")).first()
+
+    arquivo = _tdf_com_nascimento("gid-datas-1", "gid-datas-2")
+
+    r = client.post(
+        "/api/lojas/torneios/importar",
+        files={"arquivo": ("torneio.tdf", arquivo, "text/xml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    torneio_publico = r.json()
+
+    assert torneio_publico["loja"]["id"] == session_loja.id
+    assert torneio_publico["data_planejada"] == "2026-08-01"
+    assert torneio_publico["inicio_real"].startswith("2026-08-01T10:00:00")
+    assert torneio_publico["fim_real"].startswith("2026-08-01T10:00:00")
+
+    torneio_db = session.get(Torneio, torneio_publico["id"])
+    assert torneio_db.loja_id == session_loja.id
 
 
 def test_import_repetido_nao_sobrescreve_data_nascimento_existente(

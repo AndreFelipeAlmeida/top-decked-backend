@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from jose import jwt
-from fastapi import Request
 from datetime import datetime, timedelta, timezone
 
 import resend
@@ -27,16 +26,13 @@ def criar_token_confirmacao(email: str):
     return token
 
 
-async def processar_ativacao_usuario(
-    usuario: Usuario,
-    request: Request,
-):
+async def processar_ativacao_usuario(usuario: Usuario):
     if settings.DEBUG:
         usuario.is_active = True
         return
 
     token = criar_token_confirmacao(usuario.email)
-    link = f"{request.base_url}api/login/confirmar-email?token={token}"
+    link = f"{settings.FRONTEND_URL}/jogador/confirmar-email?token={token}"
 
     resend.Emails.send(
         {

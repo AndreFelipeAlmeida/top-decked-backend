@@ -1,15 +1,3 @@
-"""Testes funcionais do fluxo de torneio: criação, pareamento de rodadas
-(incluindo bye) e cálculo de pontuação — a área com mais bugs históricos do
-sistema (ver docs/DIVIDA_TECNICA.md itens 28-31, 45-47). Servem como suíte de
-regressão para exatamente essa classe de bug: qualquer um deles só é
-detectável testando através da camada HTTP real (TestClient), não chamando
-funções de serviço isoladamente com objetos montados à mão — foi assim que
-três bugs críticos passaram despercebidos apesar de validações manuais
-anteriores: `nova_rodada` confundindo Jogador.id com JogadorTorneioLink.id,
-`rodada.vencedor = <int>` quebrando com 500 em vez de setar `vencedor_id`, e
-`editar_torneio_regras` zerando a `regra_extra_id` de todo mundo sempre que
-`iniciar_torneio` é chamado sem re-passar a regra básica já configurada."""
-
 from fastapi.testclient import TestClient
 
 from app.core.db import get_session
@@ -36,15 +24,6 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -174,9 +153,6 @@ def test_criar_torneio_com_formato_invalido_e_rejeitado(client: TestClient):
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)
 
-    # "Standard" era um formato válido quando o select do frontend ainda
-    # oferecia formatos de Magic — hoje o enum FormatoTorneio só aceita
-    # PADRAO/GLC/DRAFT (ver docs/DIVIDA_TECNICA.md item 43).
     r = client.post(
         "/api/lojas/torneios/criar",
         json={"data_planejada": "2026-08-01", "jogo": "POKEMON", "formato": "Standard", "vagas": 8},
@@ -186,9 +162,6 @@ def test_criar_torneio_com_formato_invalido_e_rejeitado(client: TestClient):
 
 
 def test_get_torneios_sem_tenant_traz_todas_as_lojas(client: TestClient):
-    """GET /lojas/torneios/ é a listagem global usada pelo jogador navegando
-    pelo domínio raiz (sem contexto_dominio, ver BRK-407) — precisa mostrar
-    torneios de qualquer loja."""
     _, token_a = _criar_loja_autenticada(client, "Loja Global A", "loja.globalA@gmail.com")
     _, token_b = _criar_loja_autenticada(client, "Loja Global B", "loja.globalB@gmail.com")
 
@@ -203,12 +176,25 @@ def test_get_torneios_sem_tenant_traz_todas_as_lojas(client: TestClient):
     assert nomes_lojas == {"Loja Global A", "Loja Global B"}
 
 
+def test_get_torneios_da_loja_sem_nenhum_torneio_retorna_lista_vazia(client: TestClient):
+    _, token = _criar_loja_autenticada(client, "Loja Sem Torneio", "loja.semtorneio@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = client.get("/api/lojas/torneios/loja", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+def test_get_tipos_jogador_da_loja_sem_nenhuma_regra_retorna_lista_vazia(client: TestClient):
+    _, token = _criar_loja_autenticada(client, "Loja Sem Regra", "loja.semregra@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = client.get("/api/lojas/tipoJogador/", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
 def test_get_torneios_com_tenant_filtra_so_a_loja_do_subdominio(client: TestClient):
-    """BRK-407: dentro do subdomínio de uma loja, a mesma listagem global
-    (usada por Torneios/Rankings do jogador) precisa vir travada só nos
-    torneios daquela loja — contexto_dominio (resolvido pelo Host via
-    TenantHostMiddleware, ver BRK-307) é quem decide isso, então o front
-    não precisa (e nem consegue) contornar mandando outro loja_id."""
     from app.dependencies import contexto_dominio
 
     loja_a, token_a = _criar_loja_autenticada(client, "Loja Tenant A", "loja.tenantA@gmail.com")
@@ -326,6 +312,120 @@ def test_pareamento_com_numero_impar_gera_bye_e_pontua_corretamente(client: Test
     assert perdedor.pontuacao_com_regras == 0  # pt_derrota
     # bye: só pt_vitoria(3), sem bônus de oponente (não existe oponente real)
     assert bye_jogador.pontuacao_com_regras == 3
+
+
+def test_rodada_pendente_nao_conta_como_empate_no_desempate_suico(client: TestClient, session: Session):
+    _semear_jogadores_ruido(session, 3)
+
+    _, token = _criar_loja_autenticada(client, "Loja Rodada Pendente", "loja.rodadapendente@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(
+        session, torneio["id"], regra["id"], ["Alfa", "Beta", "Gama", "Delta"]
+    )
+    link_id_por_jogador = {p["jogador_id"]: p["link_id"] for p in participantes}
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    assert r.status_code == 200, r.text
+    pareamento_r1 = r.json()
+
+    resultados_r1 = []
+    for rodada_id, dados in pareamento_r1.items():
+        mesa = dados[0]
+        vencedor_link_id = link_id_por_jogador[mesa["jogador1"]["jogador_id"]]
+        resultados_r1.append({"id_rodada": int(rodada_id), "id_vencedor": vencedor_link_id})
+
+    r = client.put("/api/lojas/torneios/rodadas/finalizar", json=resultados_r1, headers=headers)
+    assert r.status_code == 200, r.text
+
+    # Gera a rodada 2 (repareando quem ainda não jogou entre si) mas
+    # propositalmente NÃO finaliza nenhuma mesa dela.
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    assert r.status_code == 200, r.text
+
+    # Dispara calcular_pontuacao (via editar_torneio) sem que a rodada 2
+    # tenha qualquer resultado registrado.
+    r = client.put(
+        f"/api/lojas/torneios/{torneio['id']}",
+        json={"regra_basica_id": regra["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    for participante in participantes:
+        link = session.get(JogadorTorneioLink, participante["link_id"])
+        assert link.empates == 0, f"{participante['nome']} não deveria ter empates (rodada 2 ainda pendente)"
+
+
+def test_estatisticas_do_jogador_contam_vitoria_de_verdade(client: TestClient, session: Session):
+    _, token = _criar_loja_autenticada(client, "Loja Estatisticas VDE", "loja.estatisticasvde@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Vencedora", "Perdedor"])
+    link_id_por_nome = {p["nome"]: p["link_id"] for p in participantes}
+
+    token_vencedora = _login(client, "vencedora@gmail.com", "senha123")
+    headers_vencedora = {"Authorization": f"Bearer {token_vencedora}"}
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    assert r.status_code == 200, r.text
+    rodada_id = int(list(r.json().keys())[0])
+
+    r = client.put(
+        "/api/lojas/torneios/rodadas/finalizar",
+        json=[{"id_rodada": rodada_id, "id_vencedor": link_id_por_nome["Vencedora"]}],
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/finalizar", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.get("/api/jogadores/estatisticas", headers=headers_vencedora)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["vitorias"] == 1
+    assert body["derrotas"] == 0
+    assert body["empates"] == 0
+    assert body["taxa_vitoria"] == 100
+
+
+def test_gerar_rodada_com_participante_sem_conta_nao_quebra(client: TestClient, session: Session):
+    _, token = _criar_loja_autenticada(client, "Loja Rodada Sem Conta", "loja.rodadasemconta@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+    loja_id = torneio["loja"]["id"]
+
+    # Participantes SEM conta reivindicada -- JogadorCriado.jogador_id fica
+    # None, exatamente o cenário de cadastro manual/import (diferente de
+    # _adicionar_participantes, que sempre cria uma conta real vinculada).
+    for nome, game_id in [("Sem Conta A", "gid-semconta-a"), ("Sem Conta B", "gid-semconta-b")]:
+        jogador_criado = JogadorCriado(game_id=game_id, tcg=TCG.POKEMON, jogador_id=None)
+        session.add(jogador_criado)
+        session.commit()
+        session.refresh(jogador_criado)
+
+        session.add(JogadorTorneioLink(
+            torneio_id=torneio["id"], loja_id=loja_id, jogador_criado_id=jogador_criado.id,
+            apelido=nome, pontuacao=0, pontuacao_com_regras=0,
+        ))
+        session.commit()
+
+    r = client.put(f"/api/lojas/torneios/{torneio['id']}/iniciar", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.post(f"/api/lojas/torneios/{torneio['id']}/rodada", headers=headers)
+    assert r.status_code == 200, r.text
 
 
 def test_regra_extra_soma_delta_proprio_e_bonus_de_oponente(client: TestClient, session: Session):
@@ -501,11 +601,37 @@ def test_recalcular_pontuacao_aceita_pontuacao_de_participacao_ainda_nao_salva(c
     assert r.json()["pontuacao_de_participacao"] == 10
 
 
+def test_recalcular_pontuacao_preserva_regra_extra_atribuida(client: TestClient, session: Session):
+    _, token = _criar_loja_autenticada(client, "Loja Recalcular Regra Extra", "loja.recalcregraextra@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra_basica = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra_basica["id"])
+    participantes = _adicionar_participantes(session, torneio["id"], regra_basica["id"], ["Um", "Dois"])
+    link_id = participantes[0]["link_id"]
+
+    regra_extra = _criar_regra(
+        client, headers, nome="Extra Preservada", pt_vitoria=10, pt_derrota=0, pt_empate=0,
+        pt_oponente_ganha=0, pt_oponente_perde=0, pt_oponente_empate=0,
+    )
+    r = client.patch(
+        f"/api/lojas/torneios/{torneio['id']}/jogadores/{link_id}/regra",
+        json={"regra_extra_id": regra_extra["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        f"/api/lojas/torneios/{torneio['id']}/recalcular-pontuacao",
+        json={"regra_basica_id": regra_basica["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    link = session.get(JogadorTorneioLink, link_id)
+    assert link.regra_extra_id == regra_extra["id"]
+
+
 def test_torneio_melhor_de_default_e_md1_e_pode_ser_configurado(client: TestClient):
-    """Torneios podem ser "melhor de X" (MD1/MD3/MD5 — ver Torneio.melhor_de)
-    — informativo apenas, o sistema não modela partidas individuais dentro
-    de uma rodada (ver docs/PARTIDAS.md). Default é MD1 quando o campo não é
-    enviado."""
     _, token = _criar_loja_autenticada(client, "Loja MD Default", "loja.mddefault@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)
@@ -594,10 +720,6 @@ def test_editar_rodada_atualiza_vencedor_e_pontuacao_sem_dobrar_ao_reeditar(clie
 
 
 def test_editar_rodada_com_empate_finaliza_e_soma_pontuacao_de_empate(client: TestClient, session: Session):
-    """BRK-302: declarar vencedor_id=None é uma ação explícita do organizador
-    (empate), não "ainda não jogou" — precisa finalizar a mesa (pra o front
-    poder mostrar "Sem Resultado" em vez de deixar a mesa em aberto) e somar
-    pt_empate pros dois lados."""
     _, token = _criar_loja_autenticada(client, "Loja Empate Rodada", "loja.empaterodada@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)
@@ -631,10 +753,6 @@ def test_editar_rodada_com_empate_finaliza_e_soma_pontuacao_de_empate(client: Te
 
 
 def test_deletar_rodada_apaga_a_ultima_e_libera_geracao_de_nova(client: TestClient, session: Session):
-    """BRK-302: exclusão LIFO — apagar a última rodada gerada precisa
-    remover as mesas, reverter a pontuação que elas já tivessem distribuído
-    e liberar `torneio.rodada_atual` pra que gerar a próxima rodada de novo
-    reutilize o mesmo número."""
     _, token = _criar_loja_autenticada(client, "Loja Deletar Rodada", "loja.deletarrodada@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)
@@ -948,10 +1066,6 @@ def test_deletar_torneio_de_outra_loja_e_rejeitado(client: TestClient):
 
 
 def test_loja_id_e_denormalizado_em_link_rodada_e_pontuacao_extra(client: TestClient, session: Session):
-    """BRK-304: JogadorTorneioLink, Rodada e PontuacaoExtra denormalizam
-    loja_id do torneio pai — todo fluxo real (pareamento de rodada,
-    pontuação extra) precisa deixar essas três tabelas com o MESMO loja_id
-    do torneio, nunca divergente."""
     _, token = _criar_loja_autenticada(client, "Loja Loja Id", "loja.lojaid@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}
     regra = _criar_regra(client, headers)

@@ -9,12 +9,6 @@ from app.models import Rodada, Torneio, JogadorTorneioLink, StatusTorneio, Jogad
 from app.utils.Enums import TipoTorneio, TCG
 from app.services.ConquistaService import recalcular_conquistas_jogador
 
-# Valores conhecidos do atributo `outcome` de <match> no .tdf — mapeamento
-# confirmado pelo time (ver docs/IMPORTACAO.md). Qualquer valor de outcome
-# fora deste conjunto trava a importação com uma mensagem clara em vez de
-# arriscar registrar um resultado errado (bug real corrigido aqui: a versão
-# antiga tratava qualquer `outcome != 2` como "jogador 1 venceu", então um
-# empate — outcome 3 — virava, por engano, uma vitória do jogador 1).
 OUTCOME_JOGADOR1_VENCEU = 1
 OUTCOME_JOGADOR2_VENCEU = 2
 OUTCOME_EMPATE = 3
@@ -22,15 +16,6 @@ OUTCOME_BYE = 5
 
 
 def _erro_importacao(mensagem: str) -> HTTPException:
-    """Toda falha de importação (bloco/atributo ausente, valor num formato
-    inesperado, código não mapeado, etc.) precisa passar por aqui — nunca
-    deixar uma exceção "crua" do Python (AttributeError, KeyError, TypeError)
-    subir sem tratamento: sem isso, o FastAPI devolve um 500 sem `detail`
-    nenhum, e o toast do frontend mostra só uma mensagem genérica, sem dar
-    ao usuário nada que ele consiga repassar pro time de desenvolvimento
-    (ver docs/IMPORTACAO.md). Importação de torneio é a funcionalidade
-    principal da plataforma — qualquer problema aqui precisa de uma
-    mensagem clara, não um erro mudo."""
     return TopDeckedException.bad_request(
         f"{mensagem} Avise o time de desenvolvimento sobre esse problema, de preferência "
         "junto com o arquivo que você tentou importar."
@@ -97,8 +82,6 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
     session.commit()
     session.refresh(torneio)
 
-    # Torneio importado já nasce FINALIZADO — recalcula conquistas de quem
-    # conseguimos identificar como jogador cadastrado (ver docs/CONQUISTAS.md).
     jogadores_ids = session.exec(
         select(JogadorCriado.jogador_id)
         .join(JogadorTorneioLink, JogadorTorneioLink.jogador_criado_id == JogadorCriado.id)
@@ -184,10 +167,6 @@ def _criar_relacao_jogador_torneio(xml: ET.Element, torneio: Torneio, session: S
         ultimo_nome = jogador.findtext("lastname", "").strip()
         nome = f"{primeiro_nome} {ultimo_nome}".strip()
 
-        # .tdf importado é sempre do Pokémon TCG — a âncora (JogadorCriado) é
-        # buscada/criada por (tcg, game_id), nunca por Jogador direto: mesmo
-        # que o jogador já tenha conta real, é o JogadorCriado que "segura" a
-        # participação (ver docs/JOGADORES.md).
         jogador_criado = session.exec(
             select(JogadorCriado).where(
                 (JogadorCriado.game_id == gameid_importado) &
@@ -268,8 +247,6 @@ def _timestamps_da_rodada(rodadas: list[ET.Element], numero: int) -> list[dateti
 
 
 def _calcular_inicio_real(rodadas: list[ET.Element]) -> datetime | None:
-    """Menor timestamp de partida dentro da primeira rodada — usado como
-    aproximação de quando o torneio de fato começou (ver docs/CONQUISTAS.md)."""
     if not rodadas:
         return None
     primeira_rodada_num = min(_int_obrigatorio(r.get("number"), "O número de uma rodada") for r in rodadas)
@@ -278,9 +255,6 @@ def _calcular_inicio_real(rodadas: list[ET.Element]) -> datetime | None:
 
 
 def _calcular_fim_real(rodadas: list[ET.Element]) -> datetime | None:
-    """Maior timestamp de partida dentro da última rodada — usado como
-    aproximação de quando o torneio de fato terminou (ver docs/CONQUISTAS.md).
-    Espelha _calcular_inicio_real (menor timestamp da primeira rodada)."""
     if not rodadas:
         return None
     ultima_rodada_num = max(_int_obrigatorio(r.get("number"), "O número de uma rodada") for r in rodadas)
@@ -312,13 +286,6 @@ def _importar_partidas(partidas: ET.Element, jogadores_dict: dict, torneio_id: s
             )
         outcome = _int_obrigatorio(outcome_str, f"O resultado ('outcome') de uma partida da rodada {num_rodada}")
 
-        # Mapeamento confirmado pelo time (OUTCOME_* no topo do arquivo):
-        # 1 = jogador 1 venceu, 2 = jogador 2 venceu, 3 = empate, 5 = bye
-        # (jogador 1 "vence" automaticamente, sem oponente real). Qualquer
-        # código fora desse conjunto precisa ser investigado e mapeado
-        # explicitamente antes de confiar nele; até lá, é mais seguro travar
-        # a importação com um aviso claro do que silenciosamente registrar
-        # um resultado errado (ver docs/IMPORTACAO.md).
         if outcome == OUTCOME_JOGADOR1_VENCEU:
             vencedor = jogador1_id
         elif outcome == OUTCOME_JOGADOR2_VENCEU:

@@ -7,11 +7,18 @@ from app.utils.datetimeUtil import data_agora_brasil
 from app.utils.Enums import TipoParticipanteTorneio
 
 
+def _info_participante(session: SessionDep, participante: JogadorTorneioLink, vde: dict) -> dict:
+    jogador_id = participante.jogador_criado.jogador_id if participante.jogador_criado else None
+    jogador_real = session.get(Jogador, jogador_id) if jogador_id else None
+    return {
+        "jogador_id": jogador_id,
+        "usuario_id": jogador_real.usuario_id if jogador_real else None,
+        "jogador_nome": jogador_real.nome if jogador_real else participante.apelido,
+        **vde,
+    }
+
+
 def nova_rodada(session: SessionDep, torneio: Torneio):
-    # Quem é só Juiz (JogadorTorneioLink.tipo == JUIZ, ver
-    # docs/PONTUACAO_EXTRA.md) não joga partidas — só recebe pontuação extra
-    # — então nunca entra no pareamento suíço; JOGADOR_E_JUIZ entra
-    # normalmente, é jogador de verdade também.
     jogadores = session.exec(select(JogadorTorneioLink)
                              .where(
                                  (JogadorTorneioLink.torneio_id == torneio.id) &
@@ -79,31 +86,18 @@ def nova_rodada(session: SessionDep, torneio: Torneio):
         jogador_vde = retornar_vde_jogador(
             session, jogador.jogador_criado.jogador_id, torneio)
 
+        adversario_info = {}
         if adversario:
             jogando[adversario.id] = True
             adversario_vde = retornar_vde_jogador(
                 session, adversario.jogador_criado.jogador_id, torneio)
-            adversario = session.exec(select(Jogador)
-                                      .where(Jogador.id == adversario.jogador_criado.jogador_id)).first()
-
-        jogador = session.exec(select(Jogador)
-                               .where(Jogador.id == jogador.jogador_criado.jogador_id)).first()
+            adversario_info = _info_participante(session, adversario, adversario_vde)
 
         result[str(nova_rodada.id)] = [
             {
                 "mesa": mesa_livre,
-                "jogador1": {
-                    "jogador_id": jogador.id,
-                    "usuario_id": jogador.usuario_id,
-                    "jogador_nome": jogador.nome,
-                    **jogador_vde
-                },
-                "jogador2": {
-                    "jogador_id": adversario.id,
-                    "usuario_id": adversario.usuario_id,
-                    "jogador_nome": adversario.nome,
-                    **adversario_vde
-                } if adversario else {}
+                "jogador1": _info_participante(session, jogador, jogador_vde),
+                "jogador2": adversario_info,
             }
         ]
 

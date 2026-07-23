@@ -2,10 +2,6 @@ from enum import Enum
 
 
 class TCG(str, Enum):
-    # Mantido em sincronia com as opções da sidebar do frontend
-    # (`src/lib/tcgGames.ts`) — ver `docs/DIVIDA_TECNICA.md` item 42. Antes
-    # tinha YUGIOH/MAGIC (nunca ofertados na sidebar) e não tinha ONEPIECE/
-    # POKEMON_GO (ofertados desabilitados na sidebar, mas inexistentes aqui).
     POKEMON = "POKEMON"
     ONEPIECE = "ONEPIECE"
     # Não é um TCG (jogo de cartas colecionáveis) de verdade — é o formato
@@ -26,11 +22,6 @@ class TCG(str, Enum):
 
 
 class FormatoTorneio(str, Enum):
-    # Só Pokémon TCG está implementado ponta a ponta hoje (ver
-    # `docs/COMPOSICAO.md`/`docs/RANKING.md`), então os formatos abaixo são
-    # os de Pokémon TCG — não Magic/outro TCG (ver `docs/DIVIDA_TECNICA.md`
-    # item 43). Lista deliberadamente curta ("por enquanto"); crescer aqui
-    # não exige migração.
     PADRAO = "PADRAO"
     GLC = "GLC"
     DRAFT = "DRAFT"
@@ -45,10 +36,6 @@ class FormatoTorneio(str, Enum):
 
 
 class FormatoMD(str, Enum):
-    # "Melhor de X" (best-of-X) — informativo apenas: registra qual formato
-    # de partida o torneio usa (MD1/MD3/MD5), mas o sistema não modela
-    # partidas individuais dentro de uma rodada (ver docs/PARTIDAS.md) — cada
-    # rodada segue sendo uma mesa só, com um único vencedor.
     MD1 = "MD1"
     MD3 = "MD3"
     MD5 = "MD5"
@@ -116,14 +103,6 @@ class TipoTorneio(str, Enum):
 
 
 class TipoParticipanteTorneio(str, Enum):
-    # Papel do jogador DENTRO de um torneio específico (JogadorTorneioLink.tipo)
-    # — não confundir com a conta em si (Jogador/JogadorCriado), que não tem
-    # papel nenhum, só participações. Um JUIZ ganha pontuação extra normalmente
-    # (ver docs/PONTUACAO_EXTRA.md) mas não entra no pareamento de rodadas nem
-    # no ranking/pódio DESSE torneio — só no ranking geral entre torneios.
-    # Um jogador só tem UMA linha de JogadorTorneioLink por torneio (fonte
-    # única de verdade); JOGADOR_E_JUIZ é o valor usado quando ele acumula
-    # os dois papéis nesse torneio, em vez de duas linhas separadas.
     JOGADOR = "JOGADOR"
     JUIZ = "JUIZ"
     JOGADOR_E_JUIZ = "JOGADOR_E_JUIZ"
@@ -136,11 +115,6 @@ class MotivoPontuacaoExtra(str, Enum):
 
 
 class TipoRegraPontuacaoEvento(str, Enum):
-    # Gatilho automático que uma regra de pontuação de Evento observa nos
-    # torneios do período (ver docs/EVENTOS.md) — contabilizado a partir de
-    # JogadorTorneioLink.vitorias/derrotas/empates (já calculados pelo
-    # desempate suíço, ver docs/RANKING.md) e da simples presença do
-    # jogador num torneio (participação).
     VITORIA = "VITORIA"
     DERROTA = "DERROTA"
     EMPATE = "EMPATE"

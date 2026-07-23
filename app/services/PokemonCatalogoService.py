@@ -12,12 +12,6 @@ from app.utils.datetimeUtil import agora_brasil
 POKEAPI_URL = "https://pokeapi.co/api/v2/pokemon"
 DIAS_PARA_REATUALIZAR = 30
 
-# Pokémon TCG, Pokémon VGC e Pokémon GO compartilham o mesmo catálogo de
-# espécies (a PokeAPI não distingue nenhum dos três) — cada um recebe suas
-# próprias linhas em `UnidadeCatalogo`/`CatalogoAtualizacao` (mesmo
-# external_id, tcg diferente), pra manter as rotas de /unidades e
-# representações genéricas por `tcg` sem precisar de nenhum caso especial.
-# Ver docs/COMPOSICAO.md.
 JOGOS_CATALOGO_POKEMON = (TCG.POKEMON, TCG.POKEMON_VGC, TCG.POKEMON_GO)
 
 # Local pra cadastrar Pokémon manualmente (formas/variantes que a PokeAPI não
@@ -36,9 +30,6 @@ def _extrair_id_da_url(url: str) -> int | None:
 
 
 def buscar_pokemons_pokeapi() -> list[dict]:
-    """Busca a lista completa de Pokémon na PokeAPI (nome + número da pokedex).
-    Um request só resolve, já que passar um limit maior que o total (~1350
-    hoje) traz tudo de uma vez — ver docs/COMPOSICAO.md seção 3."""
     with httpx.Client(timeout=30) as client:
         resposta = client.get(POKEAPI_URL, params={"limit": 2000, "offset": 0})
         resposta.raise_for_status()

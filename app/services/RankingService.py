@@ -2,19 +2,16 @@ from app.core.db import SessionDep
 from app.schemas.Ranking import Ranking, RankingPorLoja, RankingPorFormato
 from sqlmodel import select, extract
 from app.models import Jogador, JogadorCriado, JogadorTorneioLink, Rodada, Loja, Torneio
-from app.utils.Enums import StatusTorneio, TCG
+from app.utils.Enums import StatusTorneio
 from app.utils.TorneioDataUtil import data_efetiva_torneio
 from collections import defaultdict
 
 
-def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
-    # Itera JogadorCriado (não Jogador) — é a âncora de toda participação em
-    # torneio, com ou sem conta real vinculada (ver docs/JOGADORES.md). Sem
-    # isso, jogadores importados/cadastrados pela loja sem cadastro na
-    # plataforma nunca apareceriam no ranking.
-    jogadores_criados = session.exec(
-        select(JogadorCriado).where(JogadorCriado.tcg == TCG.POKEMON)
-    ).all()
+def calcula_ranking_geral(session: SessionDep, mes=None, ano=None, loja_id=None, tcg=None):
+    query_jogadores_criados = select(JogadorCriado)
+    if tcg is not None:
+        query_jogadores_criados = query_jogadores_criados.where(JogadorCriado.tcg == tcg)
+    jogadores_criados = session.exec(query_jogadores_criados).all()
     ranking = []
 
     for jogador_criado in jogadores_criados:
@@ -33,6 +30,8 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
         for link in links:
             torneio = link.torneio
             if not torneio:
+                continue
+            if loja_id is not None and torneio.loja_id != loja_id:
                 continue
 
             total_torneios += 1
@@ -71,7 +70,7 @@ def calcula_ranking_geral(session: SessionDep, mes=None, ano=None):
             vitorias=total_vitorias,
             derrotas=total_derrotas,
             empates=total_empates,
-            taxa_vitoria=calcular_taxa_vitoria(session, jogador) if jogador else (
+            taxa_vitoria=calcular_taxa_vitoria(session, jogador, loja_id=loja_id, tcg=tcg) if jogador else (
                 int((total_vitorias / (total_vitorias + total_derrotas + total_empates)) * 100)
                 if (total_vitorias + total_derrotas + total_empates) > 0 else 0
             )
@@ -211,19 +210,35 @@ def desempenho_por_formato(session: SessionDep, jogador: Jogador) -> list[Rankin
     return ranking
 
 
-def calcular_taxa_vitoria(session: SessionDep, jogador: Jogador):
+def calcular_taxa_vitoria(
+    session: SessionDep, jogador: Jogador, loja_id: int | None = None, tcg: str | None = None,
+):
+    links = session.exec(
+        select(JogadorTorneioLink)
+        .join(JogadorCriado, JogadorCriado.id == JogadorTorneioLink.jogador_criado_id)
+        .where(JogadorCriado.jogador_id == jogador.id)
+    ).all()
+    link_ids = {link.id for link in links}
+
     vitorias, derrotas, empates = 0, 0, 0
+    if not link_ids:
+        return 0
 
-    rodadas = session.exec(select(Rodada)
-                           .join(Torneio)
-                           .where(
-                               (Torneio.status == StatusTorneio.FINALIZADO) &
-        ((Rodada.jogador1_id == jogador.id) | (Rodada.jogador2_id == jogador.id))))
+    consulta = (select(Rodada)
+                .join(Torneio)
+                .where(
+                    (Torneio.status == StatusTorneio.FINALIZADO) &
+                    (Rodada.jogador1_id.in_(link_ids) | Rodada.jogador2_id.in_(link_ids))))
+    if loja_id is not None:
+        consulta = consulta.where(Torneio.loja_id == loja_id)
+    if tcg is not None:
+        consulta = consulta.where(Torneio.jogo == tcg)
 
-    for rodada in rodadas:
-        if (rodada.vencedor == jogador.id):
+    for rodada in session.exec(consulta).all():
+        meu_link_id = rodada.jogador1_id if rodada.jogador1_id in link_ids else rodada.jogador2_id
+        if rodada.vencedor_id == meu_link_id:
             vitorias += 1
-        elif (rodada.vencedor is not None):
+        elif rodada.vencedor_id is not None:
             derrotas += 1
         else:
             empates += 1

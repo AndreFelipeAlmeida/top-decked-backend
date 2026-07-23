@@ -6,7 +6,7 @@ from sqlmodel import select
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
-from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual
+from app.dependencies import retornar_loja_atual, retornar_jogador_atual, retornar_usuario_atual, permitir_leitura_publica
 from app.models import Evento, LojaJogadorLink, LojaJogadorOrganizadorTCG, MetaEvento, RegraPontuacaoEvento, RegraPontuacaoManualEvento
 from app.schemas.Evento import (
     EventoAtualizarDTO,
@@ -88,9 +88,16 @@ def criar_evento_organizador(
 
 
 @router.get("/", response_model=list[EventoPublico])
-def get_eventos(session: SessionDep, _: Annotated[TokenData, Depends(retornar_usuario_atual)], tcg: str | None = None):
+def get_eventos(
+    session: SessionDep,
+    _: Annotated[TokenData, Depends(retornar_usuario_atual)],
+    _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
+    tcg: str | None = None,
+):
     # Mesmo padrão de GET /lojas/torneios/ — jogadores navegam eventos de
     # qualquer loja (descoberta), não só os que já participam.
+    # permitir_leitura_publica declara pro RLS que esta leitura é
+    # deliberadamente cross-tenant (ver dependencies.py).
     query = select(Evento)
     if tcg:
         query = query.where(Evento.tcg == tcg)
@@ -108,7 +115,12 @@ def get_eventos_da_loja(session: SessionDep, loja: Annotated[TokenData, Depends(
 
 
 @router.get("/{evento_id}", response_model=EventoCompletoPublico)
-def get_evento(session: SessionDep, evento_id: int, _: Annotated[TokenData, Depends(retornar_usuario_atual)]):
+def get_evento(
+    session: SessionDep,
+    evento_id: int,
+    _: Annotated[TokenData, Depends(retornar_usuario_atual)],
+    _leitura_publica: Annotated[None, Depends(permitir_leitura_publica)],
+):
     evento = _buscar_evento_ou_404(session, evento_id)
     return retornar_evento_completo(session, evento)
 

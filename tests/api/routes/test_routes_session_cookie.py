@@ -1,8 +1,3 @@
-"""Testes da sessão via cookie transversal + CSRF (BRK-309). Ao contrário
-da maioria dos outros arquivos de teste (que limpam o cookie do TestClient
-logo após o login pra continuar testando só via header Authorization — ver
-comentário em _login desses arquivos), aqui o cookie é exatamente o que
-está sendo testado, então ele é deixado no client de propósito."""
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -34,11 +29,6 @@ def test_login_seta_cookie_de_sessao_httponly_e_cookie_csrf_legivel(client: Test
 
 
 def test_cookie_ganha_domain_localhost_quando_root_domain_e_localhost(client: TestClient, monkeypatch):
-    """Testar multi-tenancy por subdomínio localmente (ex.:
-    evolutiongames.localhost) exige o cookie de sessão compartilhado entre
-    localhost e seus subdomínios — sem Domain=.localhost explícito, o
-    cookie ficaria preso no host exato e a sessão não atravessaria
-    subdomínios nem em dev. Ver docs/tcc/MULTI_TENANCY.md."""
     monkeypatch.setattr(settings, "ROOT_DOMAIN", "localhost")
 
     r = client.post(
@@ -53,12 +43,6 @@ def test_cookie_ganha_domain_localhost_quando_root_domain_e_localhost(client: Te
 
 
 def test_cookie_ganha_domain_localtest_me_quando_root_domain_e_localtest_me(client: TestClient, monkeypatch):
-    """Mesmo caso do teste acima, mas com o domínio de teste realmente
-    recomendado pra subdomínio local (ver docs/tcc/MULTI_TENANCY.md e
-    comentário em app.core.security._cookie_domain): browsers Chromium não
-    compartilham Domain=.localhost entre subdomínios na prática, então
-    localtest.me (domínio público real, com registrable domain de verdade)
-    é quem efetivamente resolve o cross-subdomínio local."""
     monkeypatch.setattr(settings, "ROOT_DOMAIN", "localtest.me")
 
     r = client.post(

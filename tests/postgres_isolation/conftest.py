@@ -1,12 +1,3 @@
-"""Fixtures da suíte de isolamento de RLS (BRK-306) — a única suíte deste
-projeto que roda contra um Postgres real (efêmero, via testcontainers), não
-o SQLite em memória de tests/conftest.py. RLS (Row-Level Security) é um
-recurso nativo do Postgres sem equivalente em SQLite, então não dá pra
-validar as policies (migrations/versions/*_rls_tabelas_escopadas_por_loja.py)
-na suíte principal — só rodando contra o motor de banco de verdade.
-
-Pula (não falha) a suíte inteira quando o Docker não está disponível/rodando
-neste ambiente — ver módulo docstring de test_rls_isolamento.py."""
 import uuid
 
 import pytest

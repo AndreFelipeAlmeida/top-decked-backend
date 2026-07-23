@@ -1,13 +1,3 @@
-"""Testes de Pontuação Extra (docs/PONTUACAO_EXTRA.md): pontos avulsos dados
-a um jogador num torneio (trouxe um novato, atuou como juiz, etc.), sempre
-somados em `pontuacao_com_regras` — nunca em `pontuacao`. Um jogador que
-ainda não estava no torneio ganha uma participação nova na hora — exceto pro
-motivo Juiz, que exige o vínculo (tipo=JUIZ) já cadastrado antes na aba
-principal do torneio (POST /juizes, testado em test_routes_torneio_juizes.py).
-tipo=JUIZ exclui a participação do pareamento de rodadas e do ranking/pódio
-DESSE torneio (mas não do ranking geral entre torneios — isso é testado só no
-cálculo de `pontuacao_com_regras` em si, que continua igual pra todo mundo)."""
-
 from fastapi.testclient import TestClient
 
 from app.core.db import get_session
@@ -30,15 +20,6 @@ from app.utils.Enums import TCG, StatusAprovacaoLoja
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -368,9 +349,6 @@ def test_juiz_nao_aparece_no_ranking_do_torneio_mas_pontua(client: TestClient, s
     nomes_no_ranking = {item["jogador_nome"] for item in ranking}
     assert "Juiz Ciclano" not in nomes_no_ranking
 
-    # Mas a pontuação extra do juiz continua valendo (só não aparece nesse
-    # ranking específico) — isso é o que alimenta o ranking GERAL entre
-    # torneios (docs/RANKING.md), fora do escopo deste teste.
     juiz_link = session.exec(
         select(JogadorTorneioLink).where(
             JogadorTorneioLink.jogador_criado_id == juiz["jogador_criado_id"]

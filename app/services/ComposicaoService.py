@@ -13,19 +13,8 @@ from app.models import (
 )
 from app.utils.Enums import TCG
 
-# Só Pokémon TCG usa o conceito de "representação" (ícone de arquétipo com 2
-# unidades) — Pokémon VGC/GO não têm deck nem representação de deck, só a
-# composição completa (o time de 6 Pokémon em si, via JogadorComposicaoUnidade
-# / ComposicaoUnidadesModal, que já é genérico por `tcg`). Ver docs/COMPOSICAO.md.
 JOGOS_COM_REPRESENTACAO_DECK = (TCG.POKEMON,)
 
-# Pokémon GO tem uma peculiaridade que TCG/VGC não têm: o jogador leva um time
-# de 6 Pokémon pro torneio (JogadorComposicaoUnidade, igual TCG/VGC), mas
-# escolhe só 3 desses 6 pra jogar em CADA partida — um recorte que muda de
-# rodada pra rodada, sem nunca alterar o time completo. Pra TCG/VGC a
-# composição "usada na partida" é sempre a composição inteira, então nem faz
-# sentido editar por rodada — ver ComposicaoPartida/RodadaComposicao em
-# app/models.py e docs/COMPOSICAO.md.
 JOGOS_COM_COMPOSICAO_POR_PARTIDA = (TCG.POKEMON_GO,)
 
 
@@ -90,18 +79,6 @@ def _clonar_time_em_composicao_partida(session: SessionDep, link: JogadorTorneio
 
 
 def garantir_composicao_partida(session: SessionDep, rodada_id: int, link: JogadorTorneioLink, jogo: TCG) -> RodadaComposicao:
-    """Garante que exista uma RodadaComposicao pra essa (rodada, participação),
-    chamada por RodadaService.nova_rodada pra cada lado de toda rodada nova
-    (inclusive o jogador sozinho num bye). Pra jogos fora de
-    JOGOS_COM_COMPOSICAO_POR_PARTIDA (TCG, VGC), reaproveita o mesmo
-    ComposicaoPartida.id já usado na rodada anterior dessa participação — a
-    composição não muda partida a partida pra esses jogos, então criar uma
-    ComposicaoPartida idêntica a cada rodada seria só desperdício. Só Pokémon
-    GO ganha uma ComposicaoPartida nova a cada rodada (clonada do time
-    completo, seção 5.1 de docs/COMPOSICAO.md), pra permitir escolher um
-    recorte de 3 Pokémon diferente por partida via
-    PATCH .../composicao-partida sem afetar nem as rodadas passadas nem o
-    time completo."""
     rodada_anterior = session.exec(
         select(RodadaComposicao)
         .where(RodadaComposicao.jogador_torneio_link_id == link.id)

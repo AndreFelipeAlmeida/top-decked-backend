@@ -1,14 +1,3 @@
-"""Cálculo de categoria de idade (Junior/Senior/Master) dentro de uma
-Temporada Pokémon — ver docs/TEMPORADAS.md para a regra completa e o porquê.
-
-Regra oficial de Pokémon Organized Play: a categoria de um jogador numa
-temporada é definida pela idade que ele **completa até o último dia da
-temporada** (não a idade que ele tem no início dela). Por isso alguém que
-faz aniversário no meio da temporada já entra na categoria da idade nova
-mesmo que a maior parte da temporada ainda não tenha acontecido quando ele
-fez aniversário.
-"""
-
 import calendar
 from datetime import date
 

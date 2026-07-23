@@ -1,8 +1,3 @@
-"""Testes funcionais de Conquistas (BRK-303): o catálogo é semeado uma vez
-por TCG (nunca uma única conquista global cross-TCG) e o motor de
-progressão só soma torneios do MESMO jogo da conquista — jogar Pokémon GO
-não pode progredir uma conquista de Pokémon TCG, e vice-versa."""
-
 from fastapi.testclient import TestClient
 
 from app.core.db import get_session
@@ -17,15 +12,6 @@ from app.utils.datetimeUtil import data_agora_brasil
 def _login(client: TestClient, email: str, senha: str) -> str:
     r = client.post("/api/login/token", data={"username": email, "password": senha})
     assert r.status_code == 200, r.text
-    # BRK-309: login agora tambem seta cookies de sessao no TestClient (que
-    # mantem um cookie jar persistente, como um browser de verdade) -- sem
-    # limpar aqui, chamadas seguintes que passam Authorization no header
-    # explicitamente ainda carregariam o cookie da ULTIMA conta logada
-    # (silenciosamente autenticando como a pessoa errada quando um teste usa
-    # duas contas no mesmo client). Os testes deste arquivo sao sobre regras
-    # de negocio, nao sobre a sessao via cookie em si (isso tem suite propria
-    # em test_routes_login.py) -- por isso aqui a autenticacao volta a
-    # depender só do header, como antes do BRK-309.
     client.cookies.clear()
     return r.json()["access_token"]
 
@@ -124,10 +110,6 @@ def test_seed_conquistas_catalogo_e_idempotente(session: Session):
 
 
 def test_seed_desativa_catalogo_global_legado(session: Session):
-    """Uma Conquista global (tcg=None) do catálogo pré-BRK-303 não pode
-    continuar ativa lado a lado com as novas conquistas por TCG — ela é
-    desativada (não deletada, pra preservar JogadorConquista/
-    HistoricoConquista já existentes), nunca mais recalculada."""
     legada = Conquista(
         codigo="VITORIAS", nome="Vencedor", descricao="Vença partidas em torneios",
         categoria=CategoriaConquista.VITORIAS, icone="🏆", tcg=None, ativa=True,
