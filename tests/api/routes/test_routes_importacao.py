@@ -472,6 +472,131 @@ def test_import_sem_bloco_matches_dentro_de_round_e_rejeitado(client: TestClient
     assert "matches" in r.json()["detail"]
 
 
+def _tdf_envelope_com_standings(players_xml: str, match_xml: str, standings_xml: str) -> bytes:
+    xml = f"""<?xml version="1.0"?>
+<tournament>
+  <data>
+    <id></id>
+    <name>Torneio Teste</name>
+    <city>Fortaleza</city>
+    <state>CE</state>
+    <roundtime>30</roundtime>
+    <startdate>08/01/2026</startdate>
+  </data>
+  <players>
+    {players_xml}
+  </players>
+  <pods>
+    <pod>
+      <rounds>
+        <round number="1">
+          <matches>
+            {match_xml}
+          </matches>
+        </round>
+      </rounds>
+    </pod>
+  </pods>
+  <standings>
+    {standings_xml}
+  </standings>
+</tournament>"""
+    return xml.encode("utf-8")
+
+
+def test_import_com_pod_dnf_vazio_e_permitida(client: TestClient) -> None:
+    headers = _criar_loja_autenticada(client, "Loja DNF Vazio", "loja.dnfvazio@gmail.com")
+    standings = """
+    <pod category="0" type="finished">
+      <player id="gid-1" place="1" />
+      <player id="gid-2" place="2" />
+    </pod>
+    <pod category="0" type="dnf">
+    </pod>
+    """
+    xml = _tdf_envelope_com_standings(_PLAYERS_PADRAO, _match_normal("1"), standings)
+
+    r = client.post(
+        "/api/lojas/torneios/importar",
+        files={"arquivo": ("torneio.tdf", xml, "text/xml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_import_bloqueada_quando_pod_dnf_tem_jogador(client: TestClient, session: Session) -> None:
+    headers = _criar_loja_autenticada(client, "Loja Com DNF", "loja.comdnf@gmail.com")
+    standings = """
+    <pod category="0" type="finished">
+      <player id="gid-1" place="1" />
+    </pod>
+    <pod category="0" type="dnf">
+      <player id="gid-2" place="2" />
+    </pod>
+    """
+    xml = _tdf_envelope_com_standings(_PLAYERS_PADRAO, _match_normal("1"), standings)
+
+    r = client.post(
+        "/api/lojas/torneios/importar",
+        files={"arquivo": ("torneio.tdf", xml, "text/xml")},
+        headers=headers,
+    )
+    assert r.status_code == 400
+    assert "DNF" in r.json()["detail"]
+    assert "administrador do sistema" in r.json()["detail"]
+
+    # A importação inteira foi abortada -- nenhum torneio deve ter sido criado.
+    assert session.exec(select(Torneio)).first() is None
+
+
+def test_import_preenche_classificacao_oficial_a_partir_da_colocacao_final(
+    client: TestClient, session: Session
+) -> None:
+    from app.models import JogadorTorneioLink
+
+    headers = _criar_loja_autenticada(client, "Loja Classificacao Oficial", "loja.classificacaooficial@gmail.com")
+    standings = """
+    <pod category="2" type="finished">
+      <player id="gid-1" place="1" />
+      <player id="gid-2" place="2" />
+    </pod>
+    <pod category="2" type="dnf">
+    </pod>
+    """
+    xml = _tdf_envelope_com_standings(_PLAYERS_PADRAO, _match_normal("1"), standings)
+
+    r = client.post(
+        "/api/lojas/torneios/importar",
+        files={"arquivo": ("torneio.tdf", xml, "text/xml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    link1 = session.exec(
+        select(JogadorTorneioLink).join(JogadorCriado).where(JogadorCriado.game_id == "gid-1")
+    ).first()
+    link2 = session.exec(
+        select(JogadorTorneioLink).join(JogadorCriado).where(JogadorCriado.game_id == "gid-2")
+    ).first()
+    assert link1.classificacao_oficial == 1
+    assert link2.classificacao_oficial == 2
+
+
+def test_import_sem_bloco_standings_e_permitida(client: TestClient) -> None:
+    """<standings> é opcional -- um arquivo sem essa seção (formato antigo,
+    ou torneio nativo do formato mais simples) continua importando
+    normalmente, só sem preencher classificacao_oficial pra ninguém."""
+    headers = _criar_loja_autenticada(client, "Loja Sem Standings", "loja.semstandings@gmail.com")
+    xml = _tdf_envelope(_PLAYERS_PADRAO, _match_normal("1"))
+
+    r = client.post(
+        "/api/lojas/torneios/importar",
+        files={"arquivo": ("torneio.tdf", xml, "text/xml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_import_birthdate_malformada_nao_derruba_a_importacao(client: TestClient, session: Session) -> None:
     """Regressão: `_data_nascimento_importada` fazia `except TopDeckedException`
     — mas `TopDeckedException` não é uma classe de exceção de verdade (só um

@@ -362,6 +362,188 @@ def test_rodada_pendente_nao_conta_como_empate_no_desempate_suico(client: TestCl
         assert link.empates == 0, f"{participante['nome']} não deveria ter empates (rodada 2 ainda pendente)"
 
 
+def _criar_rodada_direta(
+    session: Session, torneio_id: str, loja_id: int, num_rodada: int,
+    jogador1_link_id: int, jogador2_link_id: int | None, vencedor_link_id: int | None,
+) -> Rodada:
+    rodada = Rodada(
+        torneio_id=torneio_id, loja_id=loja_id, num_rodada=num_rodada,
+        jogador1_id=jogador1_link_id, jogador2_id=jogador2_link_id, vencedor_id=vencedor_link_id,
+        finalizada=True,
+    )
+    session.add(rodada)
+    session.commit()
+    session.refresh(rodada)
+    return rodada
+
+
+def test_desempate_suico_aplica_piso_de_25_por_cento(client: TestClient, session: Session):
+    """Um oponente sem nenhuma vitória real não pode arrastar o Op Win% de
+    quem o enfrentou pra baixo de 25% — esse é o piso oficial, mesmo pra
+    quem perdeu tudo."""
+    _, token = _criar_loja_autenticada(client, "Loja Piso", "loja.pisoomw@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["A", "B", "C", "D"])
+    link = {p["nome"]: p["link_id"] for p in participantes}
+    loja_id = session.get(Torneio, torneio["id"]).loja_id
+
+    # Rodada 1: A bate B, C bate D.
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["A"], link["B"], link["A"])
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["C"], link["D"], link["C"])
+    # Rodada 2: A bate C, D bate B. B perde as duas partidas reais (0%, sem piso seria 0%).
+    _criar_rodada_direta(session, torneio["id"], loja_id, 2, link["A"], link["C"], link["A"])
+    _criar_rodada_direta(session, torneio["id"], loja_id, 2, link["D"], link["B"], link["D"])
+
+    from app.services.TorneioService import calcular_desempate_suico
+    torneio_db = session.get(Torneio, torneio["id"])
+    calcular_desempate_suico(session, torneio_db)
+    session.commit()
+
+    a = session.get(JogadorTorneioLink, link["A"])
+    c = session.get(JogadorTorneioLink, link["C"])
+    # A enfrentou B (rodada 1) e C (rodada 2). B teria 0% sem piso; com o
+    # piso de 25%, o Op Win% de A é média(25%, taxa de C).
+    # C jogou 2 rodadas reais (venceu D, perdeu de A) => 50%.
+    assert c.derrotas == 1 and c.vitorias == 1
+    assert a.porcentagem_vitorias_oponentes == 37.5
+
+
+def test_desempate_suico_aplica_teto_de_75_por_cento_pra_quem_desiste(client: TestClient, session: Session):
+    """Um jogador que desiste no meio do torneio (jogou menos rodadas do que
+    o total gerado) tem sua taxa de vitória travada em 75%, mesmo tendo
+    vencido 100% das partidas reais que disputou."""
+    _, token = _criar_loja_autenticada(client, "Loja Teto Desistencia", "loja.tetodesistencia@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["X", "Y", "Z", "W"])
+    link = {p["nome"]: p["link_id"] for p in participantes}
+    loja_id = session.get(Torneio, torneio["id"]).loja_id
+
+    # Rodada 1: Y bate X, Z bate W.
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["X"], link["Y"], link["Y"])
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["Z"], link["W"], link["Z"])
+    # Rodada 2: só X e Z jogam (X ganha) -- Y desistiu depois da rodada 1,
+    # nunca mais aparece em rodada nenhuma; total de rodadas do torneio = 2.
+    _criar_rodada_direta(session, torneio["id"], loja_id, 2, link["X"], link["Z"], link["X"])
+
+    from app.services.TorneioService import calcular_desempate_suico
+    torneio_db = session.get(Torneio, torneio["id"])
+    calcular_desempate_suico(session, torneio_db)
+    session.commit()
+
+    y = session.get(JogadorTorneioLink, link["Y"])
+    z = session.get(JogadorTorneioLink, link["Z"])
+    x = session.get(JogadorTorneioLink, link["X"])
+    assert y.vitorias == 1 and y.derrotas == 0  # 100% bruto
+    assert z.vitorias == 1 and z.derrotas == 1  # 50%, completou as 2 rodadas
+    # X enfrentou Y (rodada 1, perdeu) e Z (rodada 2, ganhou).
+    # Y desistiu (só jogou 1 de 2 rodadas) => sua taxa é travada em 75%, não 100%.
+    assert x.porcentagem_vitorias_oponentes == 62.5  # média(75%, 50%)
+
+
+def test_desempate_suico_exclui_bye_do_numerador_e_denominador(client: TestClient, session: Session):
+    """Reproduz o exemplo oficial: um oponente que venceu 2 partidas e
+    perdeu 1, mas uma das vitórias foi um bye, contribui como 1 vitória e 1
+    derrota reais (50%), nunca 2 vitórias e 1 derrota (66%) nem 1 vitória e
+    2 rodadas (33%)."""
+    _, token = _criar_loja_autenticada(client, "Loja Bye Exemplo Oficial", "loja.byeoficial@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Obs", "B", "X"])
+    link = {p["nome"]: p["link_id"] for p in participantes}
+    loja_id = session.get(Torneio, torneio["id"]).loja_id
+
+    # Rodada 1: X bate Obs; B recebe bye.
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["Obs"], link["X"], link["X"])
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["B"], None, link["B"])
+    # Rodada 2: X bate B (segunda vitória real de X); Obs não joga esta rodada.
+    _criar_rodada_direta(session, torneio["id"], loja_id, 2, link["X"], link["B"], link["X"])
+    # Rodada 3: B bate Obs; X não joga mais (desistiu depois da rodada 2).
+    _criar_rodada_direta(session, torneio["id"], loja_id, 3, link["B"], link["Obs"], link["B"])
+
+    from app.services.TorneioService import calcular_desempate_suico
+    torneio_db = session.get(Torneio, torneio["id"])
+    calcular_desempate_suico(session, torneio_db)
+    session.commit()
+
+    b = session.get(JogadorTorneioLink, link["B"])
+    x = session.get(JogadorTorneioLink, link["X"])
+    obs = session.get(JogadorTorneioLink, link["Obs"])
+
+    # B: 1 bye + 1 derrota real (rodada 2, de X) + 1 vitória real (rodada 3,
+    # contra Obs) = 2 partidas reais, 1 vitória => 50%, o exemplo oficial.
+    assert b.byes == 1 and b.vitorias == 1 and b.derrotas == 1
+    # X venceu as duas partidas reais que jogou (rodadas 1 e 2 de 3) e depois
+    # desistiu => teto de 75%; bruto seria 100% sem o teto.
+    assert x.vitorias == 2 and x.derrotas == 0
+
+    # Op Win% do Obs = média(taxa de X capada em 75%, taxa de B em 50%).
+    assert obs.porcentagem_vitorias_oponentes == 62.5
+
+
+def test_ranking_oficial_usa_confronto_direto_entre_exatamente_dois_empatados(client: TestClient, session: Session):
+    """Dois jogadores empatados em pontos/OMW%/OOMW% que jogaram entre si:
+    quem venceu aquela partida fica na posição superior do ranking oficial."""
+    _, token = _criar_loja_autenticada(client, "Loja Head To Head", "loja.headtohead@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Ana", "Bia"])
+    link = {p["nome"]: p["link_id"] for p in participantes}
+    loja_id = session.get(Torneio, torneio["id"]).loja_id
+
+    _criar_rodada_direta(session, torneio["id"], loja_id, 1, link["Ana"], link["Bia"], link["Ana"])
+
+    ana = session.get(JogadorTorneioLink, link["Ana"])
+    bia = session.get(JogadorTorneioLink, link["Bia"])
+    # Mesma pontuação pra forçar o empate cair no critério de confronto direto.
+    ana.pontuacao = bia.pontuacao = 10
+    session.add(ana)
+    session.add(bia)
+    session.commit()
+
+    from app.services.TorneioService import calcular_ranking_oficial
+    torneio_db = session.get(Torneio, torneio["id"])
+    ranking = calcular_ranking_oficial(torneio_db)
+
+    assert [link.id for link in ranking] == [ana.id, bia.id]
+
+
+def test_ranking_oficial_sorteio_e_estavel_quando_nao_ha_confronto_direto(client: TestClient, session: Session):
+    """Dois jogadores empatados que nunca jogaram entre si têm a ordem
+    decidida por sorteio — mas o mesmo torneio/dupla sempre resolve pro
+    mesmo lado, pra não ficar mudando de posição a cada carregamento."""
+    _, token = _criar_loja_autenticada(client, "Loja Sorteio Estavel", "loja.sorteioestavel@gmail.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    regra = _criar_regra(client, headers)
+    torneio = _criar_torneio(client, headers, regra["id"])
+
+    participantes = _adicionar_participantes(session, torneio["id"], regra["id"], ["Um", "Dois"])
+    link = {p["nome"]: p["link_id"] for p in participantes}
+
+    for l in link.values():
+        jt = session.get(JogadorTorneioLink, l)
+        jt.pontuacao = 10
+        session.add(jt)
+    session.commit()
+
+    from app.services.TorneioService import calcular_ranking_oficial
+    torneio_db = session.get(Torneio, torneio["id"])
+    primeira_chamada = [l.id for l in calcular_ranking_oficial(torneio_db)]
+    segunda_chamada = [l.id for l in calcular_ranking_oficial(torneio_db)]
+
+    assert set(primeira_chamada) == set(link.values())
+    assert primeira_chamada == segunda_chamada
+
+
 def test_estatisticas_do_jogador_contam_vitoria_de_verdade(client: TestClient, session: Session):
     _, token = _criar_loja_autenticada(client, "Loja Estatisticas VDE", "loja.estatisticasvde@gmail.com")
     headers = {"Authorization": f"Bearer {token}"}

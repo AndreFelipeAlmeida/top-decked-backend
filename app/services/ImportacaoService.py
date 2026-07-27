@@ -7,6 +7,7 @@ from app.core.db import SessionDep
 from app.utils.datetimeUtil import parse_data, parse_datetime, agora_brasil
 from app.models import Rodada, Torneio, JogadorTorneioLink, StatusTorneio, JogadorCriado, LojaJogadorLink
 from app.utils.Enums import TipoTorneio, TCG
+from app.utils.ImportacaoConstantes import TIPO_POD_FINALIZADO, TIPO_POD_DNF
 from app.services.ConquistaService import recalcular_conquistas_jogador
 
 OUTCOME_JOGADOR1_VENCEU = 1
@@ -56,6 +57,8 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
     except ET.ParseError:
         raise TopDeckedException.bad_request("Arquivo XML inválido")
 
+    _bloquear_se_houver_dnf(xml)
+
     torneio = _importar_metadados(xml, loja_id)
 
     if session.get(Torneio, torneio.id):
@@ -68,6 +71,7 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
 
     jogadores_dict = _criar_relacao_jogador_torneio(xml, torneio, session)
     inicio_real, fim_real = _importar_rodadas(xml, jogadores_dict, torneio.id, torneio.loja_id, session)
+    _importar_classificacao_oficial(xml, jogadores_dict, session)
 
     # Torneio importado já nasce FINALIZADO, então nunca pode ficar sem data
     # real — o .tdf normalmente traz timestamps de partida suficientes pra
@@ -95,6 +99,47 @@ def importar_torneio(session: SessionDep, arquivo: UploadFile, loja_id: int):
         recalcular_conquistas_jogador(session, jogador_id)
 
     return torneio
+
+
+def _bloquear_se_houver_dnf(xml: ET.Element) -> None:
+    standings = xml.find("standings")
+    if standings is None:
+        return
+
+    for pod in standings.findall("pod"):
+        if pod.get("type") == TIPO_POD_DNF and pod.find("player") is not None:
+            raise TopDeckedException.bad_request(
+                "Atenção: Existem jogadores com status DNF neste torneio. A importação foi "
+                "bloqueada. Por favor, entre em contato com o administrador do sistema."
+            )
+
+
+def _importar_classificacao_oficial(xml: ET.Element, jogadores_dict: dict, session: SessionDep) -> None:
+    standings = xml.find("standings")
+    if standings is None:
+        return
+
+    for pod in standings.findall("pod"):
+        if pod.get("type") != TIPO_POD_FINALIZADO:
+            continue
+
+        for jogador_el in pod.findall("player"):
+            userid = _exigir_atributo(jogador_el, "id", "de um jogador na classificação final do arquivo")
+            colocacao = _int_obrigatorio(
+                jogador_el.get("place"), "A colocação final de um jogador na classificação do arquivo")
+
+            link_id = jogadores_dict.get(userid)
+            if link_id is None:
+                raise _erro_importacao(
+                    f"O jogador de ID '{userid}' aparece na classificação final, mas não está na "
+                    "lista de jogadores do torneio — o arquivo pode estar incompleto ou corrompido."
+                )
+
+            link = session.get(JogadorTorneioLink, link_id)
+            link.classificacao_oficial = colocacao
+            session.add(link)
+
+    session.commit()
 
 
 def _importar_metadados(xml: ET.Element, loja_id: int):

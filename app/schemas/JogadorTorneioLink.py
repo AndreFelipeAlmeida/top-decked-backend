@@ -10,6 +10,7 @@ class JogadorTorneioLinkPublico(JogadorTorneioLinkBase):
     composicao_representacao: Optional[RepresentacaoComposicaoPublico] = None
     composicao_unidades: list[ComposicaoUnidadePublico] = Field(default_factory=list)
     categoria: Optional[str] = None
+    posicao_ranking: Optional[int] = None
 
 
 class PontuacaoManualDTO(BaseModel):

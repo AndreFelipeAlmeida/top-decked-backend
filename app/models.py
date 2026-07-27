@@ -117,6 +117,11 @@ class JogadorTorneioLinkBase(SQLModel):
     byes: int = Field(default=0)
     porcentagem_vitorias_oponentes: Optional[float] = Field(default=None)
     porcentagem_vitorias_oponentes_oponentes: Optional[float] = Field(default=None)
+    # Posição final exata trazida pelo arquivo importado (atributo `place`
+    # de <player> dentro de <standings>/<pod type="finished">) — estática,
+    # nunca recalculada; usada como ordenação quando a tabela de ranking é
+    # filtrada por uma categoria de idade específica em vez de "Todos".
+    classificacao_oficial: Optional[int] = Field(default=None)
 
 
 class JogadorTorneioLink(JogadorTorneioLinkBase, table=True):

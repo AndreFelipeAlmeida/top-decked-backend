@@ -1,3 +1,4 @@
+import random
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select, func
 from app.core.db import SessionDep
@@ -71,7 +72,9 @@ def calcular_categoria_do_link(session: SessionDep, torneio: Torneio, link: Joga
     return calcular_categoria_na_temporada(data_nascimento, temporada)
 
 
-def retornar_link_completo(session: SessionDep, torneio: Torneio, link: JogadorTorneioLink) -> dict:
+def retornar_link_completo(
+    session: SessionDep, torneio: Torneio, link: JogadorTorneioLink, posicao_ranking: int | None = None,
+) -> dict:
     composicao_representacao = None
     if link.composicao_representacao:
         composicao_representacao = {
@@ -120,7 +123,9 @@ def retornar_link_completo(session: SessionDep, torneio: Torneio, link: JogadorT
         "byes": link.byes,
         "porcentagem_vitorias_oponentes": link.porcentagem_vitorias_oponentes,
         "porcentagem_vitorias_oponentes_oponentes": link.porcentagem_vitorias_oponentes_oponentes,
+        "classificacao_oficial": link.classificacao_oficial,
         "categoria": calcular_categoria_do_link(session, torneio, link),
+        "posicao_ranking": posicao_ranking,
     }
 
 
@@ -204,9 +209,14 @@ def remover_juiz(session: SessionDep, torneio: Torneio, link_id: int) -> None:
 def retornar_torneio_completo(session: SessionDep, torneio: Torneio):
     torneio_dict = torneio.model_dump()
 
+    posicoes = {
+        link.id: posicao
+        for posicao, link in enumerate(calcular_ranking_oficial(torneio), start=1)
+    }
+
     torneio_dict["loja"] = torneio.loja
     torneio_dict["jogadores"] = [
-        retornar_link_completo(session, torneio, link)
+        retornar_link_completo(session, torneio, link, posicao_ranking=posicoes.get(link.id))
         for link in torneio.jogadores
     ]
 
@@ -274,11 +284,17 @@ def calcular_pontuacao(session: SessionDep, torneio: Torneio):
     calcular_desempate_suico(session, torneio)
 
 
+PISO_TAXA_VITORIA = 0.25
+TETO_TAXA_VITORIA_COMPLETOU = 1.0
+TETO_TAXA_VITORIA_DESISTIU = 0.75
+
+
 def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
     if torneio.jogo not in JOGOS_FORMATO_SUICO:
         return
 
     links = torneio.jogadores
+    total_rodadas_torneio = max((r.num_rodada for r in torneio.rodadas), default=0)
     por_link: dict[int, dict] = {}
 
     for link in links:
@@ -307,14 +323,24 @@ def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
             else:
                 empates += 1
 
-        partidas_reais = vitorias + derrotas + empates
-        taxa_vitoria = (vitorias / partidas_reais) if partidas_reais else 0.0
-
         link.vitorias = vitorias
         link.derrotas = derrotas
         link.empates = empates
         link.byes = byes
         session.add(link)
+
+        # A taxa de vitória usada no desempate (nunca a pontuação em si)
+        # exclui byes do numerador e do denominador — um bye não conta como
+        # vitória nem consome uma rodada "real" pra esse cálculo — e depois
+        # é limitada a um piso de 25% e um teto que depende de o jogador ter
+        # completado o torneio (100%) ou desistido no meio dele (75%),
+        # detectado comparando quantas rodadas ele de fato disputou (reais +
+        # byes) contra o total de rodadas geradas no torneio.
+        partidas_reais = vitorias + derrotas + empates
+        taxa_bruta = (vitorias / partidas_reais) if partidas_reais else 0.0
+        completou = (vitorias + derrotas + empates + byes) >= total_rodadas_torneio
+        teto = TETO_TAXA_VITORIA_COMPLETOU if completou else TETO_TAXA_VITORIA_DESISTIU
+        taxa_vitoria = min(max(taxa_bruta, PISO_TAXA_VITORIA), teto)
 
         por_link[link.id] = {"taxa_vitoria": taxa_vitoria, "oponentes_ids": oponentes_ids}
 
@@ -331,6 +357,68 @@ def calcular_desempate_suico(session: SessionDep, torneio: Torneio) -> None:
         link.porcentagem_vitorias_oponentes = round(por_link[link.id]["omw"] * 100, 2)
         link.porcentagem_vitorias_oponentes_oponentes = round(oomw * 100, 2)
         session.add(link)
+
+
+def calcular_ranking_oficial(torneio: Torneio) -> list[JogadorTorneioLink]:
+    """Ordena os participantes (Jogador/Jogador-e-Juiz) do torneio pela
+    hierarquia oficial completa: pontuação -> Op Win% -> Op Op Win% ->
+    confronto direto (só quando exatamente dois estão empatados e jogaram
+    entre si) -> sorteio. O sorteio é determinístico por torneio+dupla (não
+    um `random` puro a cada chamada) só pra a posição não "piscar" sozinha
+    toda vez que a tela recarrega — continua sendo, na prática, uma escolha
+    arbitrária entre os empatados, exatamente como pede a regra."""
+    participantes = [
+        link for link in torneio.jogadores
+        if link.tipo in (TipoParticipanteTorneio.JOGADOR, TipoParticipanteTorneio.JOGADOR_E_JUIZ)
+    ]
+
+    resultado_direto: dict[frozenset, int | None] = {}
+    for rodada in torneio.rodadas:
+        if not rodada.finalizada or rodada.jogador1_id is None or rodada.jogador2_id is None:
+            continue
+        resultado_direto[frozenset((rodada.jogador1_id, rodada.jogador2_id))] = rodada.vencedor_id
+
+    def chave_ordenacao(link: JogadorTorneioLink) -> tuple:
+        return (
+            -link.pontuacao,
+            -(link.porcentagem_vitorias_oponentes or 0),
+            -(link.porcentagem_vitorias_oponentes_oponentes or 0),
+        )
+
+    ordenados = sorted(participantes, key=chave_ordenacao)
+
+    resultado: list[JogadorTorneioLink] = []
+    i = 0
+    while i < len(ordenados):
+        j = i + 1
+        while j < len(ordenados) and chave_ordenacao(ordenados[j]) == chave_ordenacao(ordenados[i]):
+            j += 1
+        resultado.extend(_desempatar_grupo(ordenados[i:j], resultado_direto, torneio.id))
+        i = j
+
+    return resultado
+
+
+def _desempatar_grupo(
+    grupo: list[JogadorTorneioLink],
+    resultado_direto: dict[frozenset, int | None],
+    torneio_id: str,
+) -> list[JogadorTorneioLink]:
+    if len(grupo) <= 1:
+        return grupo
+
+    if len(grupo) == 2:
+        a, b = grupo
+        vencedor = resultado_direto.get(frozenset((a.id, b.id)))
+        if vencedor == a.id:
+            return [a, b]
+        if vencedor == b.id:
+            return [b, a]
+
+    semente = ":".join(str(link.id) for link in sorted(grupo, key=lambda link: link.id))
+    ordem = list(grupo)
+    random.Random(f"{torneio_id}:{semente}").shuffle(ordem)
+    return ordem
 
 
 def calcular_pontuacao_rodada(session: SessionDep, rodada: Rodada, regra_basica: TipoJogador):
