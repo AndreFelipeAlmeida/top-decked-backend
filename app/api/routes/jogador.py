@@ -10,7 +10,7 @@ from app.core.exception import TopDeckedException
 from app.models import Usuario, Jogador, JogadorTorneioLink, LojaJogadorLink, JogadorCriado
 from app.utils.Enums import TCG
 from app.services.UsuarioService import verificar_novo_usuario
-from app.services.JogadorService import vincular_historico_e_creditos, calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas, contar_impacto_troca_gameid
+from app.services.JogadorService import vincular_historico_e_creditos, calcular_estatisticas, retornar_historico_jogador, retornar_todas_rodadas, contar_impacto_troca_gameid, apagar_jogador_completo
 from app.services.ConquistaService import recalcular_conquistas_jogador
 from app.utils.datetimeUtil import data_agora_brasil
 from app.services.EmailService import processar_ativacao_usuario
@@ -276,8 +276,12 @@ def update_jogador(novo: JogadorUpdate,
 
 @router.delete("/{jogador_id}", status_code=204)
 def delete_usuario(session: SessionDep,
-                   jogador_id,
+                   jogador_id: int,
                    usuario: Annotated[TokenData, Depends(retornar_jogador_atual)]):
+    """Exclusão total e irreversível da própria conta -- créditos, vínculos
+    com lojas e conquistas somem de vez; o histórico de torneios já
+    disputados continua existindo, só anonimizado (ver
+    `apagar_jogador_completo`)."""
     jogador = session.get(Jogador, jogador_id)
 
     if not jogador:
@@ -286,7 +290,7 @@ def delete_usuario(session: SessionDep,
     if jogador.usuario_id != usuario.usuario_id:
         raise TopDeckedException.forbidden()
 
-    session.delete(jogador.usuario)
+    apagar_jogador_completo(session, jogador)
     session.commit()
 
 

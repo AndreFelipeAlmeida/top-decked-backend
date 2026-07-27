@@ -1,7 +1,6 @@
 from fastapi import APIRouter, UploadFile, Depends, Body
-from sqlmodel import text
 from typing import Annotated
-from app.services.TorneioService import retornar_torneio_completo, retornar_link_completo, editar_torneio_regras, regras_extras_atuais, calcular_pontuacao, calcular_pontuacao_rodada, get_torneio_top, verificar_permissao_gerenciar_torneio, adicionar_juiz, remover_juiz, salvar_link_ou_conflito
+from app.services.TorneioService import retornar_torneio_completo, retornar_link_completo, editar_torneio_regras, regras_extras_atuais, calcular_pontuacao, calcular_pontuacao_rodada, get_torneio_top, verificar_permissao_gerenciar_torneio, adicionar_juiz, remover_juiz, salvar_link_ou_conflito, apagar_torneio_completo
 from app.services.ImportacaoService import importar_torneio
 from app.services.RodadaService import nova_rodada
 from app.services.ConquistaService import recalcular_conquistas_jogador
@@ -972,35 +971,7 @@ def deletar_torneio(session: SessionDep,
 
     verificar_permissao_gerenciar_torneio(session, torneio, usuario)
 
-    composicoes_da_rodada_ou_do_jogador = """
-        SELECT composicao_partida_id FROM rodadacomposicao
-        WHERE rodada_id IN (SELECT id FROM rodada WHERE torneio_id = :torneio_id)
-           OR jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)
-    """
-    session.exec(
-        text(f"DELETE FROM composicaopartidaunidade WHERE composicao_partida_id IN ({composicoes_da_rodada_ou_do_jogador})")
-        .bindparams(torneio_id=torneio_id)
-    )
-    session.exec(
-        text(f"DELETE FROM composicaopartida WHERE id IN ({composicoes_da_rodada_ou_do_jogador})")
-        .bindparams(torneio_id=torneio_id)
-    )
-    session.exec(
-        text("""
-            DELETE FROM rodadacomposicao
-            WHERE rodada_id IN (SELECT id FROM rodada WHERE torneio_id = :torneio_id)
-               OR jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)
-        """)
-        .bindparams(torneio_id=torneio_id)
-    )
-    session.exec(
-        text("DELETE FROM jogadorcomposicaounidade WHERE jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)")
-        .bindparams(torneio_id=torneio_id)
-    )
-    session.exec(text("DELETE FROM rodada WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
-    session.exec(text("DELETE FROM jogadortorneiolink WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
-    session.exec(text("DELETE FROM pontuacaoextra WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
-    session.exec(text("DELETE FROM torneio WHERE id = :torneio_id").bindparams(torneio_id=torneio_id))
+    apagar_torneio_completo(session, torneio_id)
     session.commit()
 
 

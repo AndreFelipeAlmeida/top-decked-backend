@@ -7,6 +7,7 @@ from app.core.exception import TopDeckedException
 from app.schemas.Loja import LojaCriar, LojaPublico, LojaAtualizar, LojaPublicoTorneios
 from app.schemas.LojaJogadorLink import PromoverOrganizadorDTO
 from app.models import Loja, Torneio, Usuario, Categoria, LojaJogadorLink, LojaJogadorOrganizadorTCG
+from app.services.LojaService import apagar_loja_completa
 from sqlmodel import select
 from app.services.UsuarioService import verificar_novo_usuario
 from app.services.EmailService import processar_ativacao_usuario
@@ -135,14 +136,17 @@ def atualizar_loja(token_data: Annotated[TokenData, Depends(retornar_loja_atual)
     return loja_db
 
 
-@router.delete("/{loja_id}")
-def apagar_loja(loja_id: int, session: SessionDep):
-    loja = session.get(Loja, loja_id)
+@router.delete("/", status_code=204)
+def apagar_loja(session: SessionDep, token_data: Annotated[TokenData, Depends(retornar_loja_atual)]):
+    """Exclusão total e irreversível da própria conta de loja — torneios,
+    eventos, vínculos/créditos de jogador, estoque e a conta de login,
+    tudo junto (ver `apagar_loja_completa`). Só a própria loja autenticada
+    pode se excluir; não existe rota que apague uma loja por id arbitrário."""
+    loja = session.get(Loja, token_data.id)
     if not loja:
         raise TopDeckedException.not_found("Loja não encontrada")
-    session.delete(loja)
+    apagar_loja_completa(session, loja)
     session.commit()
-    return {"ok": True}
 
 
 @router.post("/upload_foto", response_model=LojaPublico)

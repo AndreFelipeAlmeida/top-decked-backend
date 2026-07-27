@@ -1,6 +1,6 @@
 import random
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import col, select, func
+from sqlmodel import col, select, func, text
 from app.core.db import SessionDep
 from app.core.exception import TopDeckedException
 from app.core.security import TokenData
@@ -204,6 +204,45 @@ def remover_juiz(session: SessionDep, torneio: Torneio, link_id: int) -> None:
 
     session.delete(link)
     session.commit()
+
+
+def apagar_torneio_completo(session: SessionDep, torneio_id: str) -> None:
+    """Apaga um torneio e tudo que depende dele, filho antes de pai: nenhuma
+    dessas dependências tem cascade de ORM até Torneio (algumas nem têm
+    relacionamento mapeado), e o SQLite de dev/teste não aplica
+    ON DELETE CASCADE — por isso o delete é manual e explícito em SQL puro,
+    não via `session.delete()`. Não faz commit — quem chama decide quando
+    (permite juntar com outras operações, como uma exclusão de loja inteira,
+    numa única transação)."""
+    composicoes_da_rodada_ou_do_jogador = """
+        SELECT composicao_partida_id FROM rodadacomposicao
+        WHERE rodada_id IN (SELECT id FROM rodada WHERE torneio_id = :torneio_id)
+           OR jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)
+    """
+    session.exec(
+        text(f"DELETE FROM composicaopartidaunidade WHERE composicao_partida_id IN ({composicoes_da_rodada_ou_do_jogador})")
+        .bindparams(torneio_id=torneio_id)
+    )
+    session.exec(
+        text(f"DELETE FROM composicaopartida WHERE id IN ({composicoes_da_rodada_ou_do_jogador})")
+        .bindparams(torneio_id=torneio_id)
+    )
+    session.exec(
+        text("""
+            DELETE FROM rodadacomposicao
+            WHERE rodada_id IN (SELECT id FROM rodada WHERE torneio_id = :torneio_id)
+               OR jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)
+        """)
+        .bindparams(torneio_id=torneio_id)
+    )
+    session.exec(
+        text("DELETE FROM jogadorcomposicaounidade WHERE jogador_torneio_link_id IN (SELECT id FROM jogadortorneiolink WHERE torneio_id = :torneio_id)")
+        .bindparams(torneio_id=torneio_id)
+    )
+    session.exec(text("DELETE FROM rodada WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
+    session.exec(text("DELETE FROM jogadortorneiolink WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
+    session.exec(text("DELETE FROM pontuacaoextra WHERE torneio_id = :torneio_id").bindparams(torneio_id=torneio_id))
+    session.exec(text("DELETE FROM torneio WHERE id = :torneio_id").bindparams(torneio_id=torneio_id))
 
 
 def retornar_torneio_completo(session: SessionDep, torneio: Torneio):

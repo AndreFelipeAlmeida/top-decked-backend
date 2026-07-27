@@ -1,7 +1,7 @@
 from collections import defaultdict
 from app.core.db import SessionDep
 from app.models import Jogador, JogadorTorneioLink, Torneio, Rodada, JogadorCriado
-from sqlmodel import select
+from sqlmodel import select, text
 from sqlalchemy import func
 from typing import List
 from app.utils.Enums import MesEnum, TCG
@@ -11,6 +11,38 @@ from app.utils.Enums import StatusTorneio, TipoTorneio
 from app.utils.TorneioDataUtil import data_efetiva_torneio
 from app.schemas.GameID import GameIDPublico
 from app.core.exception import TopDeckedException
+
+
+def apagar_jogador_completo(session: SessionDep, jogador: Jogador) -> None:
+    """Exclusão total e irreversível da própria conta de jogador. Créditos
+    (LojaJogadorLink, junto com o papel de organizador que dependa dele),
+    conquistas e a conta de login são removidos de vez. `JogadorCriado` —
+    a identidade dentro de cada TCG (game_id/apelido) — nunca é apagado:
+    isso quebraria o histórico de pontuação de todo torneio em que este
+    jogador já competiu. Em vez disso, `jogador_id` vira NULL nele (e em
+    HistoricoCredito/Transacao), preservando o registro histórico só sem
+    dono. Mesma filosofia SQL-puro de `apagar_torneio_completo`/
+    `apagar_loja_completa` — sem depender de cascade de ORM nem de ON
+    DELETE do banco. Não faz commit — quem chama decide quando."""
+    jogador_id = jogador.id
+
+    session.exec(text("UPDATE jogadorcriado SET jogador_id = NULL WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+    session.exec(text("UPDATE historicocredito SET jogador_id = NULL WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+    session.exec(text("UPDATE transacao SET jogador_id = NULL WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+
+    session.exec(
+        text("""
+            DELETE FROM lojajogadororganizadortcg
+            WHERE loja_jogador_link_id IN (SELECT id FROM lojajogadorlink WHERE jogador_id = :jogador_id)
+        """).bindparams(jogador_id=jogador_id)
+    )
+    session.exec(text("DELETE FROM lojajogadorlink WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+
+    session.exec(text("DELETE FROM historicoconquista WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+    session.exec(text("DELETE FROM jogadorconquista WHERE jogador_id = :jogador_id").bindparams(jogador_id=jogador_id))
+
+    session.exec(text("DELETE FROM jogador WHERE id = :jogador_id").bindparams(jogador_id=jogador_id))
+    session.exec(text("DELETE FROM usuario WHERE id = :usuario_id").bindparams(usuario_id=jogador.usuario_id))
 
 
 def posicao_do_jogador(ranking: list, jogador_id: int):

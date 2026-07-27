@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from app.core.db import get_session
 from app.models import Loja, LojaJogadorLink
@@ -197,15 +198,136 @@ def test_atualizar_loja_sem_autenticacao_e_negado(client: TestClient):
 
 def test_deletar_loja(client: TestClient):
     criada = _criar_loja(client, "Loja Deletar", "loja_del@gmail.com")
+    token = _login(client, "loja_del@gmail.com", "senha123")
 
-    r = client.delete(f"/api/lojas/{criada['id']}")
-    assert r.status_code == 200
-    assert r.json() == {"ok": True}
+    r = client.delete("/api/lojas/", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 204, r.text
 
     r = client.get(f"/api/lojas/{criada['id']}")
     assert r.status_code == 404
 
 
-def test_deletar_loja_inexistente(client: TestClient):
-    r = client.delete("/api/lojas/999999")
-    assert r.status_code == 404
+def test_deletar_loja_sem_autenticacao_e_negado(client: TestClient):
+    """Regressão: o endpoint antigo (`DELETE /lojas/{id}`) não exigia
+    autenticação nenhuma — qualquer chamada apagava qualquer loja pelo id.
+    Agora é sempre a própria loja autenticada se excluindo, sem id na URL."""
+    r = client.delete("/api/lojas/")
+    assert r.status_code == 401
+
+
+def test_deletar_loja_apaga_toda_a_cascata(client: TestClient, session: Session):
+    from datetime import date
+
+    from app.models import (
+        Categoria, Evento, Item, JogadorCriado, JogadorTorneioLink,
+        LojaJogadorLink, LojaJogadorOrganizadorTCG, Rodada, Temporada,
+        TipoJogador, Torneio, Usuario, Jogador,
+    )
+    from app.utils.Enums import TCG
+    from app.utils.datetimeUtil import data_agora_brasil
+
+    criada = _criar_loja(client, "Loja Cascata", "loja.cascata@gmail.com")
+    loja_id = criada["id"]
+    token = _login(client, "loja.cascata@gmail.com", "senha123")
+
+    regra = TipoJogador(
+        nome="Regra", pt_vitoria=3, pt_derrota=0, pt_empate=1,
+        pt_oponente_perde=0, pt_oponente_ganha=0, pt_oponente_empate=0,
+        tcg="POKEMON", loja_id=loja_id,
+    )
+    session.add(regra)
+    session.commit()
+    session.refresh(regra)
+
+    torneio = Torneio(
+        loja_id=loja_id, jogo=TCG.POKEMON, tipo="CRIADO",
+        data_planejada=date(2026, 8, 1), regra_basica_id=regra.id,
+    )
+    session.add(torneio)
+    session.commit()
+    session.refresh(torneio)
+
+    usuario = Usuario(email="jogador.cascata@gmail.com", tipo="jogador",
+                      is_active=True, data_cadastro=data_agora_brasil())
+    usuario.set_senha("senha123")
+    session.add(usuario)
+    session.commit()
+    session.refresh(usuario)
+    jogador = Jogador(nome="Jogador Cascata", usuario_id=usuario.id)
+    session.add(jogador)
+    session.commit()
+    session.refresh(jogador)
+    jogador_criado = JogadorCriado(game_id="gid-cascata", tcg=TCG.POKEMON, jogador_id=jogador.id)
+    session.add(jogador_criado)
+    session.commit()
+    session.refresh(jogador_criado)
+
+    link = JogadorTorneioLink(
+        torneio_id=torneio.id, loja_id=loja_id, jogador_criado_id=jogador_criado.id, apelido="Jogador Cascata",
+    )
+    session.add(link)
+    session.commit()
+    session.refresh(link)
+
+    rodada = Rodada(torneio_id=torneio.id, loja_id=loja_id, num_rodada=1,
+                    jogador1_id=link.id, jogador2_id=None, vencedor_id=link.id, finalizada=True)
+    session.add(rodada)
+
+    evento = Evento(loja_id=loja_id, tcg=TCG.POKEMON, nome="Evento Cascata",
+                    data_inicio=date(2026, 8, 1), data_fim=date(2026, 8, 31))
+    session.add(evento)
+
+    loja_jogador_link = LojaJogadorLink(jogador_id=jogador.id, loja_id=loja_id, creditos=10)
+    session.add(loja_jogador_link)
+    session.commit()
+    session.refresh(loja_jogador_link)
+    session.add(LojaJogadorOrganizadorTCG(loja_jogador_link_id=loja_jogador_link.id, tcg=TCG.POKEMON))
+
+    categoria = Categoria(loja_id=loja_id, nome="Categoria Cascata")
+    session.add(categoria)
+    session.commit()
+    session.refresh(categoria)
+    session.add(Item(loja_id=loja_id, nome="Item Cascata", categoria=categoria.id, preco=10))
+
+    session.add(Temporada(tcg=TCG.POKEMON, loja_id=loja_id, ano_inicio=2026, mes_inicio=1, ano_fim=2026, mes_fim=12))
+
+    session.commit()
+
+    # Capturados antes do delete: os objetos Python ficam desanexados da
+    # session logo abaixo, e ler um atributo deles depois disso explodiria
+    # com DetachedInstanceError em vez de simplesmente devolver o valor.
+    torneio_id = torneio.id
+    loja_jogador_link_id = loja_jogador_link.id
+    jogador_id = jogador.id
+    jogador_criado_id = jogador_criado.id
+    usuario_id = criada["usuario"]["id"]
+
+    r = client.delete("/api/lojas/", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 204, r.text
+
+    # A cascata roda em SQL puro (não via session.delete()), então os
+    # objetos já carregados acima continuam presos ao identity map da
+    # session -- session.get() para um deles explodiria com
+    # ObjectDeletedError (em vez de devolver None) se não forem desanexados
+    # primeiro, já que expirá-los ainda tenta (e falha) recarregá-los.
+    session.expunge_all()
+
+    assert session.get(Torneio, torneio_id) is None
+    assert session.exec(select(Rodada).where(Rodada.loja_id == loja_id)).first() is None
+    assert session.exec(select(JogadorTorneioLink).where(JogadorTorneioLink.loja_id == loja_id)).first() is None
+    assert session.exec(select(Evento).where(Evento.loja_id == loja_id)).first() is None
+    assert session.exec(select(LojaJogadorLink).where(LojaJogadorLink.loja_id == loja_id)).first() is None
+    assert session.exec(
+        select(LojaJogadorOrganizadorTCG).where(LojaJogadorOrganizadorTCG.loja_jogador_link_id == loja_jogador_link_id)
+    ).first() is None
+    assert session.exec(select(Categoria).where(Categoria.loja_id == loja_id)).first() is None
+    assert session.exec(select(Item).where(Item.loja_id == loja_id)).first() is None
+    assert session.exec(select(TipoJogador).where(TipoJogador.loja_id == loja_id)).first() is None
+    assert session.exec(select(Temporada).where(Temporada.loja_id == loja_id)).first() is None
+    assert session.get(Loja, loja_id) is None
+    assert session.get(Usuario, usuario_id) is None
+
+    # O jogador (conta, JogadorCriado, histórico de torneio) não é tocado --
+    # excluir uma loja nunca deve apagar dados que pertencem ao jogador.
+    assert session.get(Jogador, jogador_id) is not None
+    assert session.get(JogadorCriado, jogador_criado_id) is not None

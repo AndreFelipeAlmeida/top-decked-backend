@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 
 def _login(client: TestClient, email: str, senha: str) -> str:
@@ -127,12 +128,81 @@ def test_deletar_jogador_autenticado(client: TestClient) -> None:
     )
     assert r.status_code == 204
 
-    # "Deletar" só apaga o Usuario (a conta de login) — o Jogador em si (e seu
-    # histórico de torneios/links) continua existindo, só sem usuário
-    # vinculado. Ver `delete_usuario` em app/api/routes/jogador.py.
+    # Exclusão total agora: o Jogador (e a conta de login) somem de vez.
     r = client.get(f"/api/jogadores/{criado['id']}")
-    assert r.status_code == 200
-    assert r.json()["usuario"] is None
+    assert r.status_code == 404
+
+    # A conta apagada não consegue mais logar.
+    r = client.post("/api/login/token", data={"username": "bruno@gmail.com", "password": "senha123"})
+    assert r.status_code in (400, 401)
+
+
+def test_deletar_jogador_anonimiza_em_vez_de_apagar_jogadorcriado(client: TestClient, session: Session) -> None:
+    """Créditos (LojaJogadorLink), organização e conquistas são apagados de
+    vez -- mas JogadorCriado (a identidade dentro do TCG, com o histórico de
+    torneios já disputados) só perde a referência ao jogador (jogador_id
+    vira NULL), nunca é apagado."""
+    from app.models import (
+        Conquista, HistoricoConquista, JogadorConquista, JogadorCriado,
+        LojaJogadorLink, LojaJogadorOrganizadorTCG, Loja, Usuario,
+    )
+    from app.utils.Enums import CategoriaConquista, StatusAprovacaoLoja, TCG
+    from app.utils.datetimeUtil import data_agora_brasil
+
+    criado = _criar_jogador(client, "Eva", "eva.anonimizada@gmail.com", "senha123")
+    token = _login(client, "eva.anonimizada@gmail.com", "senha123")
+    jogador_id = criado["id"]
+
+    jogador_criado = JogadorCriado(game_id="gid-eva-anonimizada", tcg=TCG.POKEMON, jogador_id=jogador_id)
+    session.add(jogador_criado)
+    session.commit()
+    session.refresh(jogador_criado)
+    jogador_criado_id = jogador_criado.id
+
+    usuario_loja = Usuario(email="loja.anonimizacao@gmail.com", tipo="loja", is_active=True,
+                           data_cadastro=data_agora_brasil())
+    usuario_loja.set_senha("senha123")
+    session.add(usuario_loja)
+    session.commit()
+    session.refresh(usuario_loja)
+    loja = Loja(nome="Loja Anonimizacao", usuario_id=usuario_loja.id,
+               status=StatusAprovacaoLoja.APROVADA, slug="loja-anonimizacao")
+    session.add(loja)
+    session.commit()
+    session.refresh(loja)
+
+    link = LojaJogadorLink(jogador_id=jogador_id, loja_id=loja.id, creditos=50)
+    session.add(link)
+    session.commit()
+    session.refresh(link)
+    session.add(LojaJogadorOrganizadorTCG(loja_jogador_link_id=link.id, tcg=TCG.POKEMON))
+
+    conquista = Conquista(codigo="TESTE_ANONIMIZACAO", nome="Teste", descricao="Teste",
+                          categoria=CategoriaConquista.TORNEIOS_JOGADOS, icone="🏆", tcg=TCG.POKEMON)
+    session.add(conquista)
+    session.commit()
+    session.refresh(conquista)
+
+    session.add(JogadorConquista(jogador_id=jogador_id, conquista_id=conquista.id, progresso_atual=5, nivel_atual=1))
+    session.add(HistoricoConquista(jogador_id=jogador_id, conquista_id=conquista.id, nivel=1, progresso_no_momento=5))
+    session.commit()
+
+    # Capturado antes do delete -- ver comentário equivalente no teste de
+    # cascata de exclusão de loja (test_routes_loja.py).
+    link_id = link.id
+
+    r = client.delete(f"/api/jogadores/{jogador_id}", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 204, r.text
+
+    session.expunge_all()
+
+    assert session.get(JogadorCriado, jogador_criado_id).jogador_id is None
+    assert session.exec(select(LojaJogadorLink).where(LojaJogadorLink.jogador_id == jogador_id)).first() is None
+    assert session.exec(
+        select(LojaJogadorOrganizadorTCG).where(LojaJogadorOrganizadorTCG.loja_jogador_link_id == link_id)
+    ).first() is None
+    assert session.exec(select(JogadorConquista).where(JogadorConquista.jogador_id == jogador_id)).first() is None
+    assert session.exec(select(HistoricoConquista).where(HistoricoConquista.jogador_id == jogador_id)).first() is None
 
 
 def test_deletar_jogador_de_outra_conta_e_negado(client: TestClient) -> None:

@@ -91,7 +91,7 @@ class JogadorCriado(SQLModel, table=True):
     game_id: str
     tcg: TCG = Field(nullable=False, default=TCG.POKEMON)
     apelido: Optional[str] = Field(default=None)
-    jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id")
+    jogador_id: Optional[int] = Field(default=None, foreign_key="jogador.id", ondelete="SET NULL")
     data_nascimento: Optional[date] = Field(default=None)
     jogador: Optional["Jogador"] | None = Relationship(back_populates="tcgs")
 
@@ -560,7 +560,7 @@ class LojaJogadorOrganizadorTCG(SQLModel, table=True):
 class HistoricoCredito(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: Optional[int] = Field(
-        default=None, foreign_key="jogador.id", nullable=True)
+        default=None, foreign_key="jogador.id", nullable=True, ondelete="SET NULL")
     loja_id: int = Field(foreign_key="loja.id")
     valor_antigo: Optional[float] = Field(default=None)
     valor_novo: Optional[float] = Field(default=None)
@@ -577,7 +577,7 @@ class HistoricoCredito(SQLModel, table=True):
 class Transacao(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     jogador_id: int | None = Field(
-        default=None, foreign_key="jogador.id")
+        default=None, foreign_key="jogador.id", ondelete="SET NULL")
     loja_id: int | None = Field(
         default=None, foreign_key="loja.id")
     itens: List["ItemTransacao"] = Relationship(back_populates="transacao")
